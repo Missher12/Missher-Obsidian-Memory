@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "通用 MCP 客户端配置样例（Claude Desktop / Cursor / Cline 等常见形态）。",
+    "这不是 DeepSeek Harness 的配置：DSH 用的是 Cordis loader 条目，",
+    "见同目录的 dsh-cordis-memory.yml。",
+    "",
+    "把 mcpServers 这一段合并进对应客户端的配置文件；",
+    "路径都要换成你自己的绝对路径（相对路径在不同客户端下解析基准不同）。",
+    "本产品不需要密钥，所以这里没有 env。"
+  ],
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": [
+        "/绝对路径/mom-memory-cli/lib/mcp.js",
+        "--vault",
+        "/绝对路径/你的Obsidian库"
+      ]
+    }
+  }
+}

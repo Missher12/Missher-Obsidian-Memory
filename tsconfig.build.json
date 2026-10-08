@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist-packages/core",
+    "rootDir": "./packages/core/src",
+    "tsBuildInfoFile": "./dist-packages/core.tsbuildinfo",
+    "types": []
+  },
+  "include": ["packages/core/src/**/*.ts"]
+}

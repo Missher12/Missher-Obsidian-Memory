@@ -1,0 +1,20 @@
+node_modules/
+.pnpm-store/
+dist/
+dist-packages/
+artifacts/*.zip
+artifacts/*.sha256
+coverage/
+*.tsbuildinfo
+.DS_Store
+.tmp/
+.experiment/
+*.log
+
+# 示例 Vault 的仓库自带内容：
+# 上面 .memory/ 的两个 README 与那条**真实排队**的示例请求是刻意提交的
+# （它们说明协议长什么样），但示例 Vault 被复制出去试用后产生的
+# 认领文件、回执和导出都属于本地运行产物，不该混进仓库。
+examples/**/.memory/requests/*.claimed*.md
+examples/**/.memory/receipts/req_*.md
+examples/**/_exports/*.json

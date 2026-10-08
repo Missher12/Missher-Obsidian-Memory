@@ -1,0 +1,234 @@
+/*
+ * Missher Obsidian Memory —— 插件样式。
+ *
+ * 设计原则（与代码里的取舍保持一致）：
+ *
+ * 1. **只用 Obsidian 的变量**（`--text-*` / `--background-*` / `--interactive-*` /
+ *    `--radius-*`）。写死颜色会让插件在浅色、深色和用户自定义主题下
+ *    至少有一种是坏的；变量由主题提供，插件自动跟随。
+ * 2. **不覆盖宿主控件**。按钮、输入框一律用 Obsidian 自带的类名，
+ *    这里只排布它们（间距、换行、对齐）。覆盖 `.mod-cta` 之类的全局类
+ *    会连带影响用户的其他插件，属于越界。
+ * 3. **长内容不撑破面板**。路径、哈希、证据片段都可能很长，
+ *    一律允许换行并在需要时省略，避免侧栏被撑出横向滚动条。
+ *
+ * 构建产物是 `dist/missher-obsidian-memory/styles.css`（由 scripts/build.mjs 复制）。
+ */
+
+/* ------------------------------- 工作台布局 ------------------------------- */
+
+.mom-workbench {
+  padding: var(--size-4-2, 8px) var(--size-4-3, 12px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2, 8px);
+  /* 侧栏很窄：内容必须能换行，而不是横向溢出。 */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mom-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2, 8px);
+}
+
+.mom-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2, 4px);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: var(--size-2-2, 4px);
+}
+
+/*
+ * 标签页用 `.mom-tab` 而不是 `button` 选择器：
+ * 只影响本插件的元素，不碰宿主或其他插件的按钮。
+ */
+.mom-tab {
+  font-size: var(--font-ui-smaller, 12px);
+  padding: var(--size-2-2, 4px) var(--size-4-2, 8px);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s, 4px);
+  color: var(--text-muted);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.mom-tab:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 当前页：用主题的强调色描边，而不是自造高亮色。 */
+.mom-tab.active {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+  color: var(--text-normal);
+  font-weight: var(--font-medium, 500);
+}
+
+/* --------------------------------- 结果卡片 -------------------------------- */
+
+.mom-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2, 8px);
+  min-width: 0;
+}
+
+.mom-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px);
+  padding: var(--size-4-2, 8px) var(--size-4-3, 12px);
+  background: var(--background-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2, 4px);
+  min-width: 0;
+}
+
+.mom-card-title {
+  font-weight: var(--font-semibold, 600);
+  color: var(--text-normal);
+  /* 标题可能很长（记忆正文首行）：最多两行，超出省略。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mom-card-meta {
+  font-size: var(--font-ui-smaller, 12px);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.mom-card-snippet {
+  font-size: var(--font-ui-small, 13px);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+/* --------------------------------- 提示与状态 ------------------------------ */
+
+/*
+ * `.mom-hint` 同时用于设置页的只读说明与工作台提示，
+ * 因此只给「弱化 + 保留换行」，不加边框或背景 ——
+ * 它经常出现在 `.mom-card` 内部，再套一层边框会很吵。
+ */
+.mom-hint {
+  font-size: var(--font-ui-smaller, 12px);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  line-height: var(--line-height-tight, 1.3);
+}
+
+.mom-status {
+  font-size: var(--font-ui-smaller, 12px);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  min-height: 1em;
+}
+
+/*
+ * 警告类提示（预算被拒绝、写入冲突、隐蔽目录读不到……）。
+ * 用主题的 warning 色，但背景降到几乎透明：
+ * 这是「请注意」，不是「出错了」。
+ */
+.mom-warning {
+  font-size: var(--font-ui-small, 13px);
+  color: var(--text-warning, var(--text-normal));
+  background: var(--background-modifier-error, transparent);
+  border-left: 3px solid var(--text-warning, var(--interactive-accent));
+  border-radius: var(--radius-s, 4px);
+  padding: var(--size-2-2, 4px) var(--size-4-2, 8px);
+  white-space: pre-wrap;
+}
+
+.mom-section-title {
+  font-size: var(--font-ui-small, 13px);
+  font-weight: var(--font-semibold, 600);
+  color: var(--text-normal);
+  margin-top: var(--size-4-2, 8px);
+}
+
+/* ----------------------------------- 证据 --------------------------------- */
+
+.mom-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-1, 2px);
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: var(--size-2-2, 4px);
+  margin-top: var(--size-2-2, 4px);
+}
+
+.mom-evidence-item {
+  font-size: var(--font-ui-smaller, 12px);
+  color: var(--text-faint);
+  /* 证据里含路径与哈希：允许任意位置换行。 */
+  overflow-wrap: anywhere;
+}
+
+/* ----------------------------------- 操作行 -------------------------------- */
+
+.mom-actions,
+.mom-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2, 4px);
+}
+
+.mom-search,
+.mom-search-row,
+.mom-quick-capture {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2, 4px);
+  align-items: center;
+}
+
+/* 输入行里的文本框应该占满剩余宽度（侧栏很窄，否则会挤成一小条）。 */
+.mom-search input[type='text'],
+.mom-search-row input[type='text'],
+.mom-quick-capture input[type='text'] {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+
+.mom-empty {
+  color: var(--text-faint);
+  font-size: var(--font-ui-small, 13px);
+  font-style: italic;
+  padding: var(--size-4-2, 8px) 0;
+}
+
+.mom-body {
+  font-size: var(--font-ui-small, 13px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mom-suggestion-detail {
+  font-size: var(--font-ui-small, 13px);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+/*
+ * 命令面板里那几个动作按钮（记住剪贴板 / 处理队列 / 导出 MSE 等）
+ * 会出现在不同容器里：给它们统一的最小点击区，
+ * 但**不**改颜色与字号 —— 那些交给宿主。
+ */
+.mom-open-workbench,
+.mom-remember-clipboard,
+.mom-remember-selection,
+.mom-drain-queue,
+.mom-rebuild-index,
+.mom-show-record-detail,
+.mom-export-mse-candidate {
+  margin-inline-end: var(--size-2-2, 4px);
+}

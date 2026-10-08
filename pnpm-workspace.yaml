@@ -1,0 +1,8 @@
+packages:
+  - 'packages/*'
+
+# esbuild 需要执行安装脚本才能放好平台二进制。
+# 这里显式允许（布尔值，而不是占位字符串）：占位字符串会让 pnpm 直接报错，
+# 也无法表达「允许/禁止」这个二选一的决定。
+allowBuilds:
+  esbuild: true

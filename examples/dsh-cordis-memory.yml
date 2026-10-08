@@ -1,0 +1,51 @@
+# DeepSeek Harness（Cordis）接入样例。
+#
+# 这是**一条 loader patch 条目**，属于 DSH profile 的 patch 层
+# （`<profile>/cordis.patch.yml`：顶层是一个 YAML 数组）。
+# 把它加到那个数组里即可，不要新建第二个 patch 文件去覆盖它。
+#
+# 官方参考：DeepSeek Harness 源码包 `packages/mcp/mcp-client/README.zh.md`
+# 里的「最小配置」一节。字段语义与默认值以那份文档为准，本文件只做本产品的具体化。
+#
+# 需要替换的只有两处占位符（下面用 <尖括号> 标出）。
+# serverName 必须是 [A-Za-z0-9_-]{1,32}，它决定模型看到的工具名前缀：
+#   mcp__memory__memory_search 等等。
+
+- id: mcp-memory
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    # 工具名前缀：模型看到的是 mcp__memory__<工具名>。
+    serverName: memory
+    transport: stdio
+    command: node
+    args:
+      # 指向解压后的产物（不依赖本仓库）。
+      - '<绝对路径>/mom-memory-cli/lib/mcp.js'
+      # 目标 Obsidian 库：必须是绝对路径，且它得是你真的在用的那个库。
+      - '--vault'
+      - '<绝对路径>/你的Obsidian库'
+    # 可选：MCP 调用超时（毫秒），默认 60000。
+    # 本插件里最慢的工具是 memory_wait_receipt（可能等回执），
+    # 它自带 timeoutSeconds 参数（上限 120 秒），因此这里要留够余量。
+    toolCallTimeoutMs: 150000
+    # 可选：初始连接失败时是否拒绝激活。默认 false——
+    # MCP 服务器起不来时 harness 照常启动，只是这些工具不会出现（日志里有错误）。
+    # 如果你希望「工具没挂上就直接报错」，改成 true。
+    failOnStartupError: false
+    # 可选：排除个别工具，避免模型看到不该用的入口。
+    # 本产品没有直写工具，所以这里一般不需要。
+    # excludedTools: ['memory_session_commit']
+
+# ── 说明 ────────────────────────────────────────────────────────────────
+#
+# 1. 不需要任何密钥：本产品不访问远端服务，MCP 服务器是一个本地 stdio 进程。
+#    AI 的凭据（如果启用）存在 Obsidian 的 secretStorage 里，与这里无关。
+#
+# 2. 工具命名：模型看到 mcp__memory__memory_search / mcp__memory__memory_remember
+#    这类名字。两个不同 serverName 的同名工具可以共存。
+#
+# 3. 写工具的语义：只排队。返回 accepted（已排队）不等于 completed（已提交）。
+#    用 memory_wait_receipt 等回执，或在 Obsidian 里跑一次「处理外部写请求队列」。
+#
+# 4. 修改此条目会原地重载该服务器连接，工具名保持不变。
+#    改完不必重启整个 harness；若初始连接失败，见上面 failOnStartupError。
