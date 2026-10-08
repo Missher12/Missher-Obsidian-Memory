@@ -18,6 +18,7 @@
 
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, stat, writeFile, copyFile } from 'node:fs/promises';
+import { gzipSync } from 'node:zlib';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,42 @@ async function sha256(file) {
 
 async function ensureDir(dir) {
   await mkdir(dir, { recursive: true });
+}
+
+/**
+ * 探测当前 tar 是 BSD 还是 GNU 实现，返回对应「把属主归零」的选项。
+ *
+ * 两家的选项名**不通用**，写死任何一套都会在另一个平台失败：
+ *
+ * | 实现 | 归零属主 | macOS 元数据 |
+ * | --- | --- | --- |
+ * | BSD tar（macOS 自带 bsdtar） | `--uid 0 --gid 0` | `--no-mac-metadata` |
+ * | GNU tar（Linux / CI） | `--owner=0 --group=0` | 不需要 |
+ *
+ * `tar --version` 都支持（GNU 与 bsdtar 都实现），是这里最稳的判据；
+ * 实测 `--uid` 在 GNU tar 上直接 `unrecognized option`。
+ * 探测结果缓存，一次打包只探一次。
+ */
+let tarFlavorCache = null;
+async function tarFlavorArgs() {
+  if (tarFlavorCache !== null) return tarFlavorCache;
+  let banner = '';
+  try {
+    banner = execFileSync('tar', ['--version'], { encoding: 'utf8' });
+  } catch {
+    banner = '';
+  }
+  const isBsd = /bsdtar|libarchive/i.test(banner);
+  const isGnu = /GNU tar/i.test(banner);
+  if (!isBsd && !isGnu) {
+    /**
+     * 两家都不是就不猜：宁可失败，也不要写出一条可能把属主写错的命令。
+     * 属主会影响 tgz 的解包归属，不是纯装饰。
+     */
+    throw new Error(`无法识别的 tar 实现（--version 输出：${banner.trim().slice(0, 120) || '(空)'}）；打包中止。`);
+  }
+  tarFlavorCache = isBsd ? ['--no-mac-metadata', '--uid', '0', '--gid', '0'] : ['--owner=0', '--group=0'];
+  return tarFlavorCache;
 }
 
 /**
@@ -164,30 +201,46 @@ async function main() {
   const cliTgz = path.join(outDir, `mom-memory-cli-${version}.tgz`);
   await rm(cliTgz, { force: true });
   /**
-   * 同样钉死时间与属主：否则同一个 `lib/cli.js` 每次打出来的 tgz 哈希都不同。
+   * 打 tgz 要同时满足两件事：**归档器差异不能出错**，**产物要可复现**。
    *
-   * 时间不靠 `--mtime`——macOS 自带的是 bsdtar，不认这个选项，也不认 `--sort=name`。
-   * 改成先把暂存目录里所有文件的 mtime 归零，归档器就写不出差异；
-   * gzip 头由 `GZIP=-n` 去掉时间戳。`--no-mac-metadata` 只有 bsdtar 有，
-   * GNU tar 会拒绝，因此单独重试一次。
+   * 1. 时间：先把暂存目录里所有条目的 mtime 钉到固定值（`normalizeTimestamps`），
+   *    这样归档器写不出时间差异，gzip 也不必靠环境变量去猜。
+   * 2. 属主：GNU tar 与 BSD tar 用的是**不同的选项名**——
+   *    GNU 认 `--owner=0/--group=0`，BSD 认 `--uid 0/--gid 0`。
+   *    写死其中一套会在另一个平台直接失败（Linux CI 上就是
+   *    `tar: unrecognized option '--uid'`），所以这里先探测再选。
+   * 3. 压缩：**不用 `tar -z`，也不拼 shell 字符串**。
+   *    直接把 tar 的 stdout 收成 Buffer，交给 Node 标准库 `gzipSync`——
+   *    它不写 gzip 头里的时间戳，输出逐字节稳定。
+   *    更重要的是：`execFileSync` 在 tar 退出码非 0 时**抛异常**，
+   *    绝不可能出现「tar 失败但产物看起来生成了」。
+   *    之前那版 `/bin/sh -c "tar … | gzip"` 只取管道最后一个进程的状态，
+   *    把 tar 的失败吞掉了——空 gzip 一路走到解包时才炸，就是 CI 那次的现象。
    */
   await normalizeTimestamps(cliStage);
-  /**
-   * 压缩这一步**不用 `tar -z`**：bsdtar 内建的 gzip 会往头里写时间戳，
-   * 而且不受 `GZIP=-n` 影响（实测同一个 tar 流每次 gzip 头都差一个字节，
-   * 正好落在 gzip mtime 字段上）。改成先吐未压缩 tar、再交给 `gzip -n`，
-   * `-n` 明确要求不写时间戳与原始文件名。
-   */
-  const tarArgs = ['--numeric-owner', '--uid', '0', '--gid', '0', '-cf', '-', '-C', outDir, 'mom-memory-cli'];
-  const quotedTar = (extra = []) => [`tar`, [...extra, ...tarArgs].map(arg => `'${arg}'`).join(' ')];
-  let tarCommand;
+  const tarArgs = [
+    ...(await tarFlavorArgs()),
+    '--numeric-owner',
+    '-cf',
+    '-',
+    '-C',
+    outDir,
+    'mom-memory-cli',
+  ];
+  let tarBuffer;
   try {
-    execFileSync('tar', ['--no-mac-metadata', ...tarArgs], { stdio: ['ignore', 'pipe', 'ignore'] });
-    tarCommand = quotedTar(['--no-mac-metadata']);
-  } catch {
-    tarCommand = quotedTar();
+    tarBuffer = execFileSync('tar', tarArgs, { maxBuffer: 64 * 1024 * 1024 });
+  } catch (error) {
+    /**
+     * 失败就说清楚失败在哪：CI 里 tar 的 stderr 只有一行，
+     * 默认的 Node 异常会把这一行埋在几十行堆栈里，反而不好排查。
+     */
+    const stderr = error && typeof error === 'object' && 'stderr' in error ? String(error.stderr ?? '').trim() : '';
+    throw new Error(`tar 归档失败（退出码 ${error?.status ?? '未知'}）：${stderr || error?.message || '未知错误'}`);
   }
-  execFileSync('/bin/sh', ['-c', `${tarCommand.join(' ')} | gzip -n > '${cliTgz}'`]);
+  const tgz = gzipSync(tarBuffer);
+  check('tar 归档流非空', tarBuffer.length > 0, `${tarBuffer.length} 字节`);
+  await writeFile(cliTgz, tgz);
 
   /**
    * 解压后**必须能跑**：这一条是「独立包」这个承诺的证据。

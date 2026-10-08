@@ -9,8 +9,16 @@
 协调者 7 个独立脚本全绿（第 8 个 MCP 真机 smoke 等冻结后由协调者跑）；唯一未完成的是「真实 Obsidian GUI 里的原生验收」，
 它被系统许可（Screen Recording 未授权）挡住，属明确未验证层。**
 
-Git 提交/推送/Release 由协调者负责：本分支 `main` **尚无任何 commit**，
-98 个文件全是未跟踪状态。本会话没有 `git add`、没有 commit、没有 push。
+Git 提交/推送/Release 由协调者负责。协调者已完成首个提交并推送私有仓库：
+
+```text
+仓库   Missher12/Missher-Obsidian-Memory
+分支   main
+commit 7a6d41a7f08d906ff70730ab5a448e0c49e042f6   feat: release standalone Obsidian memory plugin 0.1.0
+```
+
+本会话**没有** `git add`/commit/push。上述提交之后的唯一改动是本文件的
+`scripts/package.mjs` 跨平台归档修复（CI 失败项），工作树里未提交，等协调者接管。
 
 ## 冻结候选（要核对的就用这一组）
 
@@ -19,7 +27,7 @@ Git 提交/推送/Release 由协调者负责：本分支 `main` **尚无任何 c
 | 版本 | `0.1.0` |
 | 分支 | `main`（无 commit） |
 | 插件 ZIP | `dist/missher-obsidian-memory-0.1.0.zip` → `dc1463d8aadd86d5fe55f5d76d484cdc083fe3f75499eb903aa3428656a7cba6` |
-| 独立 CLI | `dist/mom-memory-cli-0.1.0.tgz` → `7deebe82e45d20a96a824b49625005252db05d9a6c259607214e76e61150abd8` |
+| 独立 CLI | `dist/mom-memory-cli-0.1.0.tgz` → `25403c772d591639e5fe2c7b972c5feedd8552a0428761d72bcb311e52f3a169`（**本机 BSD tar 分支**；Linux GNU tar 分支哈希不同，见下） |
 | 插件 main.js | `dist/missher-obsidian-memory/main.js` → `61f71cc8eff1aeeddc0f5d5c469f9a520cbd37fee67c803363531756d139966a` |
 | 插件 manifest | `dist/missher-obsidian-memory/manifest.json` → `391cefdab7043b35e7e56a97ca2f2b6a5899ffbf1875e02574c474847e6337b7` |
 | 插件 styles.css | `dist/missher-obsidian-memory/styles.css` → `aa140388950a2b1480bb6c0b9f263a42cba63e6e1552ac3adee57d237802a28e` |
@@ -27,13 +35,25 @@ Git 提交/推送/Release 由协调者负责：本分支 `main` **尚无任何 c
 校验和汇总在 `dist/SHA256SUMS.txt`（里面是 5 行：插件 ZIP、CLI tgz、
 以及插件目录下三个文件；`dist/SHA256SUMS` 是构建阶段生成的同名简表）。
 
-### 打包现在是可复现的
+### 打包是可复现的，并且跨平台归档器都能跑
 
-`node scripts/package.mjs` 连跑三次，5 个交付物的 SHA-256 **完全一致**。做法：
-打包前把暂存目录里所有条目的 mtime 钉到 `1980-01-01`（`find -exec touch -t`），
-tar 流交给 `gzip -n`（bsdtar 内建 gzip 会写时间戳，且不受 `GZIP=-n` 影响）。
-**注意**：`zip` 打包需要目录里那三个文件的 mtime 固定，所以别在 `package` 与
-核对哈希之间再跑 `build`。
+`node scripts/package.mjs` 连跑三次，5 个交付物的 SHA-256 **完全一致**。三件事一起保证：
+
+1. **时间**：打包前把暂存目录里所有条目的 mtime 钉到 `1980-01-01`（`find -exec touch -t`）。
+2. **属主**：GNU tar 与 BSD tar 的选项名不同，脚本先探测 `tar --version` 再选——
+   GNU 用 `--owner=0 --group=0`，BSD 用 `--uid 0 --gid 0`（外加 `--no-mac-metadata`）。
+   写死任何一套都会在另一个平台直接失败：Linux CI 第一次就是
+   `tar: unrecognized option '--uid'`。
+3. **压缩**：不用 `tar -z`、也不拼 shell 字符串。tar 的 stdout 收成 Buffer 后交给
+   Node 标准库 `gzipSync`（不写 gzip 时间戳），`execFileSync` 在 tar 非零退出时抛异常——
+   所以 **tar 失败一定是打包失败**，不会留下一个空 tgz 等到解包时才炸。
+   （旧版 `/bin/sh -c "tar … | gzip"` 只取管道最后一个进程的状态，正是 CI 那次
+   「tar 报错却继续跑，最后报 CLI 文件缺失」的成因。）
+
+**注意**：`zip` 打包需要那三个文件的 mtime 固定，所以别在 `package` 与核对哈希之间再跑 `build`。
+**跨平台哈希差异**：同一份输入在 BSD tar 与 GNU tar 下产出的 tgz 哈希**不同**
+（归档头里的属主写法不同）。这不影响可复现性——每个平台各自稳定；
+但跨平台比对校验和时要用该平台自己产出的那份。
 
 ## 复现全部结论的精确命令
 
@@ -108,14 +128,15 @@ node scripts/e2e-mcp.mjs     # MCP 端到端：88 项通过，0 项失败
   移动端 API 与能力差异**没有实测**，因此不推断移动端具体缺什么。
 - **真实远端模型端点**：e2e 打的是本地假端点。
 - **MSE 端到端**：只做本地生成 + 本地按 `mse-method-v1` 校验，未与真实 MSE 通信。
-- **MCP 真机 SDK smoke**：`verify-mcp-independent.mjs` 未跑（等冻结后由协调者执行）。
+- **MCP 真机 SDK smoke**：协调者已在冻结后跑通（DSH MCP SDK 2.0.0，从 tgz 解包运行 5/5）。
 - **提示注入**：护栏在「哪些内容允许进上下文」这一层，不在「模型说了什么」这一层。
 - **多设备并发**：未验证，也未声称。
 
 ## 环境事实（免得下一次重新踩）
 
 - 机器上 `ps` 被限制（`Operation not permitted`），排查进程用 `lsappinfo` / `pgrep`。
-- macOS 自带 `bsdtar 3.5.3`：**不支持** `--sort` / `--mtime`；`--no-mac-metadata` 只有它有。
+- macOS 自带 `bsdtar 3.5.3`：**不支持** `--sort` / `--mtime` / `--mode`；`--no-mac-metadata` 只有它有。
+  GNU tar 反过来：认 `--owner=`/`--group=`，不认 `--uid`/`--gid`/`--no-mac-metadata`。
 - `pnpm@11.1.3` 与锁文件一致；有探针曾回显 `pnpm 12.10.1`，属环境噪声，冻结安装仍按 11.1.3 验证过。
 - 测试用的合成库只在 `.experiment/`（已被 `.gitignore` 忽略）下；本会话未读任何真实个人 Vault。
 - 本会话启动的 Obsidian 实例（pid 87288 / window_id 12813）加载的是用户既有登录库，

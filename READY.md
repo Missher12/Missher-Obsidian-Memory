@@ -16,13 +16,16 @@ Git 状态：分支 `main`，**无任何 commit**，98 个文件全部未跟踪�
 
 ```text
 dc1463d8aadd86d5fe55f5d76d484cdc083fe3f75499eb903aa3428656a7cba6  missher-obsidian-memory-0.1.0.zip
-7deebe82e45d20a96a824b49625005252db05d9a6c259607214e76e61150abd8  mom-memory-cli-0.1.0.tgz
+25403c772d591639e5fe2c7b972c5feedd8552a0428761d72bcb311e52f3a169  mom-memory-cli-0.1.0.tgz   ← 本机 BSD tar 分支
 61f71cc8eff1aeeddc0f5d5c469f9a520cbd37fee67c803363531756d139966a  missher-obsidian-memory/main.js
 391cefdab7043b35e7e56a97ca2f2b6a5899ffbf1875e02574c474847e6337b7  missher-obsidian-memory/manifest.json
 aa140388950a2b1480bb6c0b9f263a42cba63e6e1552ac3adee57d237802a28e  missher-obsidian-memory/styles.css
 ```
 
 `node scripts/package.mjs` 连跑三次，上面 5 个哈希**逐一相同**（归档时间戳已归一化）。
+**tgz 之后改过一次**：为修 Linux CI 的 `tar: unrecognized option '--uid'`，
+打包改用平台探测 + `gzipSync`，tgz 由 `7deebe82…` 变为 `25403c77…`（插件 ZIP 与三个插件文件
+哈希不变）。BSD 与 GNU tar 产出的 tgz 哈希本来就不同，跨平台不要互相比对。
 文件大小：ZIP 134,577 B；tgz 159,633 B；main.js 509,915 B；styles.css 6,553 B。
 `manifest.json` 关键字段：`id=missher-obsidian-memory`、`version=0.1.0`、
 `minAppVersion=1.5.0`、`isDesktopOnly=true`。
@@ -42,6 +45,9 @@ aa140388950a2b1480bb6c0b9f263a42cba63e6e1552ac3adee57d237802a28e  missher-obsidi
 | 6 | `node scripts/e2e-cli.mjs` | CLI 端到端：34 项通过，0 项失败；闭环结论行成立 |
 | 7 | `node scripts/e2e-mcp.mjs` | MCP 端到端：88 项通过，0 项失败 |
 | 8 | 独立 CLI 解包复核 | 解包后 `lib/cli.js help`、`queue-status` 直接可跑，**不依赖仓库** |
+| 9 | `PATH` 注入假 GNU tar 再打包 | 探测分支正确选中 `--owner=0 --group=0`；该分支三次打包哈希一致 |
+| 10 | `PATH` 注入「创建即失败」的假 tar | **打包以退出码 1 失败**，报 `tar 归档失败（退出码 2）：tar: simulated failure`，且**不留下空 tgz** |
+| 11 | `--out` 指向含空格与单引号的目录 | 打包成功、解包后 CLI 可跑（路径按参数传递，不经 shell）|
 
 MCP 协议握手（真实 JSON-RPC，对 `examples/synthetic-vault`）：
 
@@ -107,10 +113,23 @@ zoom(...)                → ScreenCaptureKit capture failed … 用户拒绝了
 证据原文留在
 `.experiment/obs-mem-native-acceptance-20261009-liyj_ksr/evidence/native-acceptance-status.md`。
 
+## 冻结与推送状态（协调者已完成）
+
+```text
+仓库   Missher12/Missher-Obsidian-Memory（私有）
+分支   main
+commit 7a6d41a7f08d906ff70730ab5a448e0c49e042f6
+标题   feat: release standalone Obsidian memory plugin 0.1.0
+```
+
+协调者另跑：8 组 48 项独立验证全绿；真实 DSH MCP SDK 2.0.0 从 tgz 解包运行 5/5；
+全部源文件运行期稳定；原 56 个会话与 4 份 profile 配置保留。
+
 ## 给协调者的下一步
 
-1. `main` 首个 commit；Release 说明写入上面的哈希。
-2. Release 明确列出「桌面原生 GUI 验收未完成（系统许可受阻）」。
-3. 冻结后跑 `verify-mcp-independent.mjs --bundle <mcp.js> --sha256 <hex>`。
+1. 本轮唯一新改动是 `scripts/package.mjs` 的跨平台归档修复（未提交），
+   请复核后自行提交；本会话不 commit、不 push。
+2. 让 CI 重跑 Linux 打包 job（run37850250345 的失败项），确认 GNU tar 分支通过。
+3. Release 明确列出「桌面原生 GUI 验收未完成（系统许可受阻）」。
 4. 若要在有屏幕录制许可的会话补原生验收，按协调目录的 `native-validation-plan.md` 走；
    实验库与回执都还在原处，可以直接续用。
