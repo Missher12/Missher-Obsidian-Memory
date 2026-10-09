@@ -39,7 +39,7 @@ import { NodeFileStore } from './node-store.js';
 import { ExternalQueueClient, RECEIPT_LABELS } from './external-queue.js';
 
 const NAME = 'missher-obsidian-memory';
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const PROTOCOL_VERSION = '2024-11-05';
 
 /* ------------------------------------------------------------------ */

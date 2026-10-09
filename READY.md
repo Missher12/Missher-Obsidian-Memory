@@ -1,135 +1,23 @@
-# READY —— 冻结候选就绪清单
+# 0.1.1 交付清单
 
-> 生成时间：2026-10-09。执行者：原生 DSH 会话（`deepseek-account` / `deepseek-flash`，max 推理）。
-> 本文件只写**跑过的命令与真实结果**。设计说明在 `docs/ARCHITECTURE.md`，
-> 交接与未验证层在 `HANDOVER.md`。
+2026-10-09，按最新用户授权由 Codex 接续实现、验收和私有 Git 交付；原生 DSH 已停止，不再派发。0.1.0 保留原 tag 与资产。
 
-## 结论
+本版修复自动复盘设置未被调度消费、本地维护未做确定性复盘及错误经过模型预算的问题。包含暂停/卸载检查、调度防重入、闲置活动接线、读取失败准确报告；不新增宿主或 MSE 依赖。
 
-**源码与包：可以按可安装的 0.1.0 交付。**
-**原生 GUI 验收：未完成**，原因是本机系统许可（Screen Recording 未授权），不是代码问题。
-这一层必须由协调者记入 Release，不能写成已通过。
+验证：类型检查通过；232 项测试通过，新增自动复盘定向 4 项（使用真正耗尽的预算，不把零上限当作耗尽）；18/18 自检通过，包含 CLI 34 项与 MCP 88 项端到端检查。原 0.1.0 冻结独立验收证据保持其历史层级，不冒称在新版重跑。
 
-Git 状态：分支 `main`，**无任何 commit**，98 个文件全部未跟踪；本会话未 `git add`、未提交、未推送。
+真实 Obsidian 1.14.4：既有基础闭环完成程序化验收；0.1.1 在备份安装后新增开关、调度防重入、本地建议、无计费标记、预算保持与 CLI 提交补验。日常根 Second Brain、默认本地自动复盘、AI/MSE 关闭、插件启用及错误检查已回读。详见 [运行验收](docs/LIVE-ACCEPTANCE.md)。
 
-## 冻结校验和
+物理键鼠、长时间调度、真实远端模型、实际 MSE 接收、其他平台原生与多设备并发仍未验证。原始日志、机器路径、用户库及窗口截图仅留本机。
+
+## 产物校验和
 
 ```text
-dc1463d8aadd86d5fe55f5d76d484cdc083fe3f75499eb903aa3428656a7cba6  missher-obsidian-memory-0.1.0.zip
-25403c772d591639e5fe2c7b972c5feedd8552a0428761d72bcb311e52f3a169  mom-memory-cli-0.1.0.tgz   ← 本机 BSD tar 分支
-61f71cc8eff1aeeddc0f5d5c469f9a520cbd37fee67c803363531756d139966a  missher-obsidian-memory/main.js
-391cefdab7043b35e7e56a97ca2f2b6a5899ffbf1875e02574c474847e6337b7  missher-obsidian-memory/manifest.json
+f43a37c903623770313928f89736e6ab9e67b6d6ee48d6b9dbf8d1b4cd3278bf  missher-obsidian-memory-0.1.1.zip
+b4164a0b1d1b3759951dd9ba0487f785dd8b45bcd52154a3ccf14422d6915d14  mom-memory-cli-0.1.1.tgz
+72fc7961d56c444a610e75932f35b1f34c9720400df27412ac560f64c2de2be1  missher-obsidian-memory/main.js
+d7c3d1345421092da126da0ebfb4f4e1ec531e6e8c9527525ced9cde60922992  missher-obsidian-memory/manifest.json
 aa140388950a2b1480bb6c0b9f263a42cba63e6e1552ac3adee57d237802a28e  missher-obsidian-memory/styles.css
 ```
 
-`node scripts/package.mjs` 连跑三次，上面 5 个哈希**逐一相同**（归档时间戳已归一化）。
-**tgz 之后改过一次**：为修 Linux CI 的 `tar: unrecognized option '--uid'`，
-打包改用平台探测 + `gzipSync`，tgz 由 `7deebe82…` 变为 `25403c77…`（插件 ZIP 与三个插件文件
-哈希不变）。BSD 与 GNU tar 产出的 tgz 哈希本来就不同，跨平台不要互相比对。
-文件大小：ZIP 134,577 B；tgz 159,633 B；main.js 509,915 B；styles.css 6,553 B。
-`manifest.json` 关键字段：`id=missher-obsidian-memory`、`version=0.1.0`、
-`minAppVersion=1.5.0`、`isDesktopOnly=true`。
-
-> `minAppVersion: 1.5.0` 标的是 API 下限，**不是已验收版本**；
-> 实际只在本机 1.13.4 上启动过，而 GUI 层验收被系统许可挡住（见下）。
-
-## 跑过的命令与结果
-
-| # | 命令 | 结果 |
-| --- | --- | --- |
-| 1 | `pnpm install --frozen-lockfile` | 通过（obsidian 保持 1.13.1；`pnpm-lock.yaml` 已提交内容一致） |
-| 2 | `node scripts/build.mjs` | `core, plugin, cli, mcp` 四份产物；**重复构建哈希相同** |
-| 3 | `node scripts/package.mjs` | 7/7 项检查通过；ZIP + tgz + `SHA256SUMS.txt` |
-| 4 | `node scripts/verify.mjs` | **18/18 项通过**（含产物边界、三份类型检查、228 项测试、两个 e2e、校验和一致） |
-| 5 | `npx vitest run` | **11 个测试文件 / 228 项全部通过** |
-| 6 | `node scripts/e2e-cli.mjs` | CLI 端到端：34 项通过，0 项失败；闭环结论行成立 |
-| 7 | `node scripts/e2e-mcp.mjs` | MCP 端到端：88 项通过，0 项失败 |
-| 8 | 独立 CLI 解包复核 | 解包后 `lib/cli.js help`、`queue-status` 直接可跑，**不依赖仓库** |
-| 9 | `PATH` 注入假 GNU tar 再打包 | 探测分支正确选中 `--owner=0 --group=0`；该分支三次打包哈希一致 |
-| 10 | `PATH` 注入「创建即失败」的假 tar | **打包以退出码 1 失败**，报 `tar 归档失败（退出码 2）：tar: simulated failure`，且**不留下空 tgz** |
-| 11 | `--out` 指向含空格与单引号的目录 | 打包成功、解包后 CLI 可跑（路径按参数传递，不经 shell）|
-
-MCP 协议握手（真实 JSON-RPC，对 `examples/synthetic-vault`）：
-
-```text
-initialize → {'name': 'missher-obsidian-memory', 'version': '0.1.0'}
-tools/list → 11 个工具：memory_search, memory_get, memory_explain, memory_status,
-             memory_remember, memory_update, memory_forget, memory_session_commit,
-             memory_wait_receipt, memory_receipts, memory_queue_status
-```
-
-这条握手**不写库、不发模型请求**（初始化只描述能力）。
-
-## 协调者独立脚本（本会话实跑，非自评）
-
-```text
-verify-core-independent.cjs    {"total":13,"passed":13,"failed":0,"sourceStable":true}
-verify-ai-independent.cjs      {"pass":6,"fail":0}            self-report: SOURCE_CHECKS_ONLY
-verify-qa-independent.cjs      {"pass":3,"fail":0}            self-report: CONTRACTS_ONLY
-verify-vault-independent.cjs   {"pass":4,"fail":0,"nativePending":1}
-verify-queue-independent.cjs   {"total":4,"passed":4,"failed":0}
-verify-node-independent.cjs    {"total":4,"failed":0,"passed":4}   （含 N04）
-verify-ui-independent.cjs      {"pass":9,"fail":0,"nativePending":true}
-verify-mcp-independent.mjs     未跑：要求 --bundle <冻结 mcp.js> --sha256 <hex>
-```
-
-这些脚本自己就把 `acceptance` 标成「不是原生验收」——不要把上表当 GUI 证据。
-
-## 反证（证明新回归测试是有效的）
-
-| 反证做法 | 结果 |
-| --- | --- |
-| 去掉 `queue.ts` 的 `oneOf: SCOPE_KINDS` | 新增的「未知 scope 入队即拒」测试**红** |
-| 放宽 `validateReceipt` 的 completed 分支 | 「自报成功但无证据被降级为 failed」测试**红**（同时另一项也红） |
-| 把 MCP 回执的 `store.load({force:true})` 改回 `load()` | MCP e2e 中 3 项回归**红** |
-| 把 `capturedHashes` 还原成旧全局 Map 语义 | UI 接线测试的旧建议哈希绑定回归**红** |
-
-## 原生验收：做到了哪一步，卡在哪
-
-**做到的**（准备动作，不是验收结论）：
-
-- 在工作区内被 Git 忽略的 `.experiment/` 下建了唯一专属合成实验库：
-  `.experiment/obs-mem-native-acceptance-20261009-liyj_ksr/OBS-MEM-Acceptance-d635e3a8eb7b`
-  （回执文件 `acceptance-target.json`）。
-- 冻结候选的插件三件套已放进该库的 `.obsidian/plugins/missher-obsidian-memory/`。
-- 官方 Obsidian 1.13.4 已启动（pid 87288，window_id 12813）。
-
-**卡住的**：读取窗口时系统拒绝——
-
-```text
-check_permissions        → Accessibility: granted / Screen Recording: NOT granted
-get_window_state(87288,12813) → protected_resource_scope_invalid
-zoom(...)                → ScreenCaptureKit capture failed … 用户拒绝了应用程序、窗口、显示器捕捉的TCC
-```
-
-**没有做的事**（按约定克制）：没有 shell 截图兜底、没有走隐藏 IPC、没有手改全局 Vault 登记、
-没有去点那个权限提示窗、没有关掉用户原先的窗口。
-**实验库至今没有被登记进 `obsidian.json`**（已用 grep 核对：里面只有用户既有的两个个人库）。
-
-**因此仍未验证**：实验库登记、插件在真实 Obsidian 里的加载、`.memory` 在真实索引里的可见性、
-`adapter.rename` 认领、`Vault.process` 在真实人工编辑并发下的行为、Vault 事件是否真的触发刷新、
-真实界面（工作台 / 设置页 / 弹窗）的观感与交互。
-
-证据原文留在
-`.experiment/obs-mem-native-acceptance-20261009-liyj_ksr/evidence/native-acceptance-status.md`。
-
-## 冻结与推送状态（协调者已完成）
-
-```text
-仓库   Missher12/Missher-Obsidian-Memory（私有）
-分支   main
-commit 7a6d41a7f08d906ff70730ab5a448e0c49e042f6
-标题   feat: release standalone Obsidian memory plugin 0.1.0
-```
-
-协调者另跑：8 组 48 项独立验证全绿；真实 DSH MCP SDK 2.0.0 从 tgz 解包运行 5/5；
-全部源文件运行期稳定；原 56 个会话与 4 份 profile 配置保留。
-
-## 给协调者的下一步
-
-1. 本轮唯一新改动是 `scripts/package.mjs` 的跨平台归档修复（未提交），
-   请复核后自行提交；本会话不 commit、不 push。
-2. 让 CI 重跑 Linux 打包 job（run37850250345 的失败项），确认 GNU tar 分支通过。
-3. Release 明确列出「桌面原生 GUI 验收未完成（系统许可受阻）」。
-4. 若要在有屏幕录制许可的会话补原生验收，按协调目录的 `native-validation-plan.md` 走；
-   实验库与回执都还在原处，可以直接续用。
+版本与运行包匹配；发布时创建 0.1.1 新 Release，不替换 0.1.0。Git/CI 最终状态以远端回读及 Release 链接为准。

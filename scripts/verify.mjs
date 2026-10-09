@@ -80,7 +80,7 @@ async function main() {
     record('插件产物没有直接使用 require("fs")', !/require\(["']fs["']\)/.test(main));
     record(
       '插件产物包含版本标识（可核对装的是哪一版）',
-      main.includes('missher-obsidian-memory') || main.includes('v0.1.0'),
+      main.includes('missher-obsidian-memory') || main.includes('v0.1.1'),
     );
   }
   if (existsSync(path.join(root, 'packages', 'core', 'dist', 'index.js'))) {
@@ -119,8 +119,8 @@ async function main() {
   }
 
   /* ---------- 5. 交付物与校验和 ---------- */
-  const zip = path.join(root, 'dist', 'missher-obsidian-memory-0.1.0.zip');
-  const tgz = path.join(root, 'dist', 'mom-memory-cli-0.1.0.tgz');
+  const zip = path.join(root, 'dist', 'missher-obsidian-memory-0.1.1.zip');
+  const tgz = path.join(root, 'dist', 'mom-memory-cli-0.1.1.tgz');
   const sums = path.join(root, 'dist', 'SHA256SUMS.txt');
   const hasArtifacts = existsSync(zip) && existsSync(tgz) && existsSync(sums);
   if (hasArtifacts) {

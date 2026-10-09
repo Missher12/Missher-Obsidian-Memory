@@ -261,7 +261,7 @@ export class MemorySettingTab extends PluginSettingTab {
     containerEl.createEl('h3', { text: '复盘' });
     new Setting(containerEl)
       .setName('自动复盘')
-      .setDesc('在会话结束、闲置与每日/每周检查点触发本地复盘（本地检查不调用模型）。')
+      .setDesc('在新内容闲置与每日/每周检查点触发本地复盘；会话提交先入库等待检查点。关闭后停止自动调度，手动复盘仍可用。本地检查不调用模型。')
       .addToggle(toggle => {
         toggle.setValue(this.plugin.currentSettings().review.autoReview);
         toggle.onChange(async value => {

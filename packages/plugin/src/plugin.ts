@@ -22,6 +22,7 @@ import {
   runAiReview,
   runLocalReview,
   type MemoryRecord,
+  type JobRecord,
   type PluginSettings,
   type ReviewSuggestion,
   type ScopeFilter,
@@ -91,6 +92,7 @@ export default class MissherMemoryPlugin extends Plugin {
   private readonly capturedHashes = new Map<string, Map<string, string>>();
   /** 上次活动时间（用户写入或打开工作台），用于闲置触发。 */
   private lastActivityAt = 0;
+  private scheduling = false;
   /** 最近一次问答的发送范围报告（含被挡下的条目与原因）。 */
   private lastSendScope: SendScopeReport | null = null;
   /** 最近一次问答的预算闸门结论（null = 还没问过）。 */
@@ -145,6 +147,7 @@ export default class MissherMemoryPlugin extends Plugin {
       isBusy: () => this.service.writeQueue.busy(),
       onError: message => new Notice(`记忆库跟随改动刷新失败：${message}`, 8_000),
       onRefreshed: () => {
+        this.noticeActivity();
         void this.refreshViews();
       },
     });
@@ -241,19 +244,27 @@ export default class MissherMemoryPlugin extends Plugin {
    */
   async tickJobs(): Promise<void> {
     const runner = this.service.jobs;
-    if (runner.jobs.queuePaused()) return;
-    for (const decision of runner.decide()) {
-      if (!decision.allowed) continue;
-      if (decision.kind === 'periodic_daily' || decision.kind === 'periodic_weekly') {
-        await this.runMaintenanceJob(decision.kind, decision.trigger, decision.reason);
-        continue;
+    if (this.scheduling || !this.momSettings.review.autoReview || runner.jobs.queuePaused() || runner.isUnloaded()) return;
+    this.scheduling = true;
+    try {
+      for (const decision of runner.decide()) {
+        if (!this.momSettings.review.autoReview || runner.jobs.queuePaused() || runner.isUnloaded()) break;
+        if (!decision.allowed) continue;
+        if (decision.trigger !== 'idle' || runner.jobs.cursor('local-review') !== runner.inputFingerprint()) {
+          await this.runMaintenanceJob(
+            decision.kind === 'periodic_weekly' ? 'periodic_weekly' : 'periodic_daily',
+            decision.trigger,
+            decision.reason,
+          );
+        }
+        // 本地复盘不要求模型。既有闲置提取仅在模型明确配置后继续。
+        if (decision.kind === 'extract_session' && this.momSettings.review.autoReview && !runner.jobs.queuePaused() && !runner.isUnloaded() && this.service.aiConfigured()) {
+          const job = await runner.enqueue({ kind: decision.kind, scope: 'extract', trigger: decision.trigger });
+          await this.runExtractJob(job.id);
+        }
       }
-      const job = await runner.enqueue({
-        kind: decision.kind,
-        scope: decision.kind === 'extract_session' ? 'extract' : decision.kind,
-        trigger: decision.trigger,
-      });
-      await this.runExtractJob(job.id);
+    } finally {
+      this.scheduling = false;
     }
   }
 
@@ -269,14 +280,14 @@ export default class MissherMemoryPlugin extends Plugin {
    */
   async runMaintenanceJob(
     kind: 'periodic_daily' | 'periodic_weekly',
-    trigger: string,
+    trigger: JobRecord['trigger'],
     reason: string,
   ): Promise<string> {
     const runner = this.service.jobs;
     const job = await runner.enqueue({
       kind,
-      scope: kind,
-      trigger: trigger === 'weekly' ? 'weekly' : 'daily',
+      scope: trigger === 'idle' ? 'local-review' : kind,
+      trigger,
     });
     const outcome = await runner.run(job.id, async () => {
       const problems: string[] = [];
@@ -290,14 +301,15 @@ export default class MissherMemoryPlugin extends Plugin {
       } catch (error) {
         problems.push(`载入失败：${error instanceof Error ? error.message : String(error)}`);
       }
+      const suggestions = problems.length === 0 ? await this.runLocalReview() : [];
       const pending = this.service.store.all().filter(record => record.meta.status === 'pending').length;
       const patches = this.service.store.pendingPatches().length;
       const unknownJobs = runner.jobs.byStatus('unknown').length;
       return {
-        ok: true,
+        ok: problems.length === 0,
         modelUsed: false,
         message:
-          `${reason} 检查结果：待确认候选 ${pending} 条 · 待审补丁 ${patches} 条 · ` +
+          `${reason} 本地复盘建议 ${suggestions.length} 条 · 检查结果：待确认候选 ${pending} 条 · 待审补丁 ${patches} 条 · ` +
           `结果未知的付费作业 ${unknownJobs} 个` +
           (problems.length === 0 ? ' · 载入无问题' : ` · ${problems.join('；')}`),
       };
@@ -430,6 +442,7 @@ ${record.body}`;
    */
   noteSelfWrite(path: string, content?: string): void {
     this.indexMonitor.noteSelfWrite(path, content);
+    if (path.endsWith('.md') && !path.includes('/.memory/')) this.noticeActivity();
   }
 
   /** 索引跟随刷新的统计（设置页展示，也用于测试断言）。 */

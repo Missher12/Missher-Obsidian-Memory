@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = (process.argv[2] ?? 'all').toLowerCase();
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const PLUGIN_ID = 'missher-obsidian-memory';
 
 const banner = (name) =>

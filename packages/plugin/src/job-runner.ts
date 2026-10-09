@@ -534,7 +534,8 @@ export class AiJobRunner {
      * 于是「付费未知」这件事在恢复时消失，还可能被重放。因此
      * `billableRequestSent` 仍然在**发请求之前**写进作业记录。
      */
-    this.queue.markBillable(jobId);
+    const localOnly = job.kind === 'periodic_daily' || job.kind === 'periodic_weekly' || job.kind === 'index_rebuild';
+    if (!localOnly) this.queue.markBillable(jobId);
     let promptText = this.inputFingerprint() || job.kind;
     if (promptPreview !== undefined) {
       try {
@@ -543,7 +544,9 @@ export class AiJobRunner {
         /* 预览失败不改变闸门的存在：退回指纹估算，照样是有界的。 */
       }
     }
-    const gate = await this.beginModelCall({
+    const gate = localOnly
+      ? { ok: true as const, reservedTokens: 0, reservationId: '' }
+      : await this.beginModelCall({
       purpose: `作业「${job.kind}」`,
       promptText,
       /**
@@ -614,7 +617,7 @@ export class AiJobRunner {
          */
         job.status = this.queue.queuePaused() ? 'paused' : job.status;
         job.error = commitGate.allowed ? '插件已卸载，结果被拒绝。' : commitGate.reason;
-        await this.settleModelCall({
+        if (!localOnly) await this.settleModelCall({
           reservedTokens,
           reservationId: gate.reservationId,
           usage: result.usage,
@@ -631,14 +634,15 @@ export class AiJobRunner {
        * - 模型根本没被调用：退回预占——预占是为了崩溃后能对账，
        *   不是为了多算用户的钱。
        */
-      if (result.modelUsed) {
+      if (localOnly && result.modelUsed) throw new Error('本地维护不能提交模型结果。');
+      if (!localOnly && result.modelUsed) {
         // work 登记的用法优先；`result.usage` 是它同时回传的副本。
         this.lastSettlement = await this.settleModelCall({
           reservedTokens,
           reservationId: gate.reservationId,
           usage: reportedUsage ?? result.usage,
         });
-      } else {
+      } else if (!localOnly) {
         await this.releaseReservation(reservedTokens, gate.reservationId);
         this.lastSettlement = { accounted: 'refunded', tokens: 0 };
       }
@@ -689,7 +693,7 @@ export class AiJobRunner {
       this.queue.finish(jobId, { status, items, cursorTo: fingerprint }, this.now());
       this.cursorAdvance(job.scope, fingerprint);
       job.error = result.message;
-      this.lastInputAt = 0;
+      if (!localOnly) this.lastInputAt = 0;
       await this.save();
       return { jobId, status, message: result.message, items };
     } catch (error) {

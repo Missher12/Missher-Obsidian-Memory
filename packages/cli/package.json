@@ -1,6 +1,6 @@
 {
   "name": "@mom/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Missher Obsidian Memory 的外部 Node 适配器（CLI + MCP stdio）。核心逻辑来自 @mom/core。",

@@ -246,7 +246,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (args.command === 'version') {
-    process.stdout.write('mom-memory 0.1.0\n');
+    process.stdout.write('mom-memory 0.1.1\n');
     return 0;
   }
   if (!(COMMANDS as readonly string[]).includes(args.command)) {
@@ -1308,7 +1308,7 @@ function fail(message: string): void {
 }
 
 function printHelp(): void {
-  process.stdout.write(`mom-memory 0.1.0 —— Missher Obsidian Memory 的独立命令行入口
+  process.stdout.write(`mom-memory 0.1.1 —— Missher Obsidian Memory 的独立命令行入口
 
 用法：
   mom-memory <命令> --vault <Vault绝对路径> [选项]
