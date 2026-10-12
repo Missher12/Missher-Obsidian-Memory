@@ -39,3 +39,9 @@ MSE 维护任务独立完成 12 项实际核心的合成契约断言；这些是
 产物：`dist/missher-obsidian-memory-0.2.0.zip`、`dist/mom-memory-cli-0.2.0.tgz`、插件三件套及 `dist/SHA256SUMS.txt`。源码可通过 `pnpm install --frozen-lockfile`、`pnpm package`、`pnpm verify` 串行重建和验证。
 
 升级前备份插件设置、托管 Markdown 和原根 `.memory`。旧版不能完整理解同级分类目录；回退应恢复成对的插件/设置，保留新建笔记，不用旧状态覆盖新操作。本轮没有自动迁移或需要回滚的个人库修改。
+
+## Git 交付状态
+
+实现提交 `a7749eb02e0cc298619286c611c861d4fe28ef3e` 已保存在本地 main。向原私有仓库 main 推送返回 HTTP 403（Write access to repository not granted）；SSH 回退返回 Permission denied (publickey)，已连接 GitHub 的仓库查询返回 404。远端仍为 `7189a2224134e44650d9e8fb4f64f1d7d74333ec`，不能称已推送或已发布 0.2.0 Release。
+
+需要恢复本机对原仓库的写权限后执行 `git push origin main`，再核对远端与 HEAD。代码、测试、包和文档均已完成；本地另有 `dist/missher-obsidian-memory-0.2.0-source.bundle` 保存 Git 历史，便于转移到有写权限的电脑。
