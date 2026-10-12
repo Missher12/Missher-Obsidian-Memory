@@ -7,8 +7,8 @@
  *    桥接项显示“未送达”。核心不引用任何 MSE 代码。
  * 2. **不冒充已支持**。本插件只生成真实兼容 `mse-method-v1` 的包，
  *    并在本地按 MSE 的实际校验规则（6 个键的精确集合 + SHA-256 校验和）自检，
- *    让“这个包确实能被导入”成为可验证事实，而不是文案承诺。
- * 3. **不绕过验证、不自我授予信用**。候选导入后是 `candidate`；
+ *    只验证交换格式；实际导入仍受 MSE 的内容清洗、范围与候选规则约束。
+ * 3. **不绕过验证、不自我授予信用**。新导入通常形成 `candidate`，重复内容可能返回既有记录；
  *    可见/已评审/已试用/已验证是**不同维度**，绝不压缩成一个布尔值。
  *    没有精确回执时显示“本地已停用，MSE 撤回未完成”。
  */
@@ -56,7 +56,7 @@ export function packetChecksum(packet: {
   return sha256Hex(JSON.stringify(packetBody(packet)));
 }
 
-/** 本地按 MSE 的真实规则校验一个包。 */
+/** 本地校验 MSE 交换包的字段、类型与摘要；不代表远端接受。 */
 export function validatePacket(packet: unknown): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
   if (!packet || typeof packet !== 'object') return { ok: false, reasons: ['包不是对象。'] };
@@ -346,15 +346,22 @@ export async function refreshRemoteStatus(input: {
   if (!input.channel || item.remote.candidateId === '') return item;
   try {
     const result = await input.channel.readStatus({ candidateId: item.remote.candidateId });
-    item.remote.readAt = new Date(input.now).toISOString();
     if ('error' in result) return item;
-    item.remote.reviewedAt = result.reviewedAt ?? item.remote.reviewedAt;
-    item.remote.trialAt = result.trialAt ?? item.remote.trialAt;
-    item.remote.validatedAt = result.validatedAt ?? item.remote.validatedAt;
-    item.remote.suspendedAt = result.suspendedAt ?? item.remote.suspendedAt;
-    item.remote.applicability = result.applicability ?? item.remote.applicability;
-    item.remote.openQuestions = result.openQuestions ?? item.remote.openQuestions;
-    item.remote.candidateVersion = result.candidateVersion ?? item.remote.candidateVersion;
+    // 状态是一份明确版本的快照，不能把新版身份与旧版验证证据拼接。
+    if (result.candidateId !== undefined && result.candidateId !== item.remote.candidateId) return item;
+    const version = result.candidateVersion;
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1 || version < item.remote.candidateVersion) return item;
+    const textFields = ['reviewedAt', 'trialAt', 'validatedAt', 'suspendedAt', 'applicability'] as const;
+    if (textFields.some(key => result[key] !== undefined && typeof result[key] !== 'string')) return item;
+    if (result.openQuestions !== undefined && (!Array.isArray(result.openQuestions) || result.openQuestions.some(value => typeof value !== 'string'))) return item;
+    item.remote.readAt = new Date(input.now).toISOString();
+    item.remote.reviewedAt = result.reviewedAt ?? '';
+    item.remote.trialAt = result.trialAt ?? '';
+    item.remote.validatedAt = result.validatedAt ?? '';
+    item.remote.suspendedAt = result.suspendedAt ?? '';
+    item.remote.applicability = result.applicability ?? '';
+    item.remote.openQuestions = [...(result.openQuestions ?? [])];
+    item.remote.candidateVersion = version;
     return item;
   } catch {
     return item;

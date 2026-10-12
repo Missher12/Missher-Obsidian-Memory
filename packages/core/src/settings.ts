@@ -5,6 +5,7 @@
 
 import { DEFAULT_ROOT, assertSafeRoot } from './paths.js';
 import { DEFAULT_TRIGGERS, type TriggerConfig } from './jobs.js';
+import { defaultOrganization, normalizeOrganization, type OrganizationSettings } from './organization.js';
 
 export interface AiSettings {
   /** 是否启用模型相关功能（提取、复盘、问答）。关闭后核心功能照常可用。 */
@@ -71,6 +72,7 @@ export interface MseSettings {
 export interface PluginSettings {
   /** 记忆根目录（Vault 内相对路径）。 */
   root: string;
+  organization: OrganizationSettings;
   ai: AiSettings;
   review: ReviewSettings;
   search: SearchSettings;
@@ -84,6 +86,7 @@ export interface PluginSettings {
 export function defaultSettings(): PluginSettings {
   return {
     root: DEFAULT_ROOT,
+    organization: defaultOrganization(),
     ai: {
       enabled: false,
       baseUrl: '',
@@ -149,6 +152,11 @@ export function mergeSettings(raw: unknown): { settings: PluginSettings; warning
     warnings.push('记忆根目录不是有效字符串，已回退默认值。');
   }
 
+  try {
+    base.organization = normalizeOrganization(input.organization);
+  } catch (error) {
+    warnings.push(`文件组织设置无效，已回退旧版布局：${error instanceof Error ? error.message : String(error)}`);
+  }
   mergeAi(base.ai, input.ai, warnings);
   mergeReview(base.review, input.review, warnings);
   mergeSearch(base.search, input.search, warnings);

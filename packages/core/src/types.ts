@@ -74,24 +74,24 @@ export const SOURCE_KINDS: readonly SourceKind[] = [
 
 /** 记忆的分类归类目录，用于决定文件落盘位置（纯展示/组织用途）。 */
 export type MemoryCategory =
-  | 'inbox'
-  | 'about-me'
-  | 'people'
-  | 'projects'
+  | 'memory'
+  | 'profile'
+  | 'scene'
   | 'knowledge'
+  | 'research'
+  | 'decision'
+  | 'planning'
+  | 'workflow'
+  | 'lesson'
   | 'journal'
-  | 'review'
-  | 'archive';
+  | 'weekly'
+  | 'monthly'
+  | 'system'
+  | 'template';
 
 export const MEMORY_CATEGORIES: readonly MemoryCategory[] = [
-  'inbox',
-  'about-me',
-  'people',
-  'projects',
-  'knowledge',
-  'journal',
-  'review',
-  'archive',
+  'memory', 'profile', 'scene', 'knowledge', 'research', 'decision', 'planning',
+  'workflow', 'lesson', 'journal', 'weekly', 'monthly', 'system', 'template',
 ];
 
 /**
@@ -105,6 +105,8 @@ export interface MemoryMeta {
   id: string;
   /** 记忆类型。 */
   kind: MemoryKind;
+  /** 可选的文件组织分类；旧记录缺省，独立于 kind/status/scope。 */
+  category?: MemoryCategory;
   /** 记忆状态。 */
   status: MemoryStatus;
   /** 作用范围种类。 */

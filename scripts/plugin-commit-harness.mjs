@@ -14,15 +14,16 @@
  */
 
 import { build } from 'esbuild';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export async function buildPluginCommitHarness() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'mom-plugin-commit-'));
+  const experiment = path.join(root, '.experiment');
+  await mkdir(experiment, { recursive: true });
+  const dir = await mkdtemp(path.join(experiment, 'mom-plugin-commit-'));
   const outfile = path.join(dir, 'harness.mjs');
   await build({
     entryPoints: [path.join(root, 'scripts', 'plugin-commit-entry.ts')],
@@ -38,7 +39,7 @@ export async function buildPluginCommitHarness() {
   });
   return {
     moduleUrl: pathToFileURL(outfile).href,
-    /** 用完删掉临时打包目录（不留在系统临时目录里）。 */
+    /** 用完只删本次创建的唯一打包目录。 */
     dispose: () => rm(dir, { recursive: true, force: true }),
   };
 }

@@ -7,12 +7,12 @@
  *
  * ## 路径契约
  *
- * **所有输入与输出都是 Vault 相对路径，并且已经包含记忆根。**
+ * **所有输入与输出都是 Vault 相对路径，内容限于已配置的目录。**
  * 记忆根为 `Brain` 时，状态文件是 `Brain/.memory/state.json`，
  * 请求是 `Brain/.memory/requests/req_x.md`。
  *
  * 适配器**不再前置任何根**：前置一次就会变成 `Brain/Brain/...`。
- * 每个公共方法在调用任何 Vault API **之前**先用 `assertVaultRelativePath`
+ * 每个公共方法在调用任何 Vault API **之前**先用根目录或分类目录守卫
  * 校验：绝对路径、`..`、`.`、盘符、UNC、`~`、空字节与保留目录名一律拒绝。
  * 校验看的是原始写法，不做「先归一化再检查」。
  *
@@ -33,6 +33,10 @@ import { TFile, TFolder, type App, type DataAdapter } from 'obsidian';
 import {
   PathError,
   assertVaultRelativePath,
+  assertOrganizationPath,
+  normalizeOrganization,
+  isInsideRoot,
+  type OrganizationSettings,
   compareDeleteExpectation,
   compareExpectation,
   contentHashOf,
@@ -49,6 +53,7 @@ export interface VaultFileStoreOptions {
   app: App;
   /** 记忆根目录（Vault 内相对路径）；必须与核心 `MemoryStore` 使用同一个值。 */
   memoryRoot: string;
+  organization?: OrganizationSettings;
   /**
    * 每次成功写入 / 改名 / 删除之后回调一次（路径为 Vault 相对路径）。
    *
@@ -66,6 +71,7 @@ export class VaultFileStore implements FileStore {
   readonly kind = 'obsidian-vault';
   private readonly app: App;
   private readonly root: string;
+  private readonly organization: OrganizationSettings;
   private readonly adapter: DataAdapter;
   private readonly onWrite: ((path: string, content?: string) => void) | undefined;
   private rev = 0;
@@ -83,6 +89,7 @@ export class VaultFileStore implements FileStore {
      * 因此根不合法就根本不该构造出实例。
      */
     this.root = assertVaultRelativePath(options.memoryRoot, options.memoryRoot, '记忆根目录');
+    this.organization = normalizeOrganization(options.organization);
   }
 
   get memoryRoot(): string {
@@ -104,7 +111,10 @@ export class VaultFileStore implements FileStore {
 
   /** 校验一个来自核心的路径；不合法直接抛，绝不静默改成别的路径。 */
   private safe(path: string, label = '路径'): string {
-    return assertVaultRelativePath(this.root, path, label);
+    if (this.organization.preset === 'legacy' || isInsideRoot(`${this.root}/.memory`, path)) {
+      return assertVaultRelativePath(this.root, path, label);
+    }
+    return assertOrganizationPath(this.root, this.organization, path, label);
   }
 
   /**

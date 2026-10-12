@@ -12,13 +12,12 @@
  *    而不是假装成功、也不是报错；
  * 5. 排队的请求**不会**直接出现在记忆目录里（没有第二个写入者）。
  *
- * 全程使用仓库外的临时合成库，不碰任何真实 Vault。
+ * 全程使用本仓库 .experiment 下的唯一临时合成库，不碰任何真实 Vault。
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -105,7 +104,7 @@ async function seedMemory(vault, memoryRoot, entries) {
     throw new Error(`播种提交结果不符合预期：${JSON.stringify(outcome)}（至少应有 ${entries.length} 条）`);
   }
 
-  // 3) 取回真实 id：用**正文**匹配（每条都不一样），这一步是脚手架核对，不是模型可见路径。
+  // 3) 取回真实 id：精确匹配显式标题，并要求唯一命中；这一步是本地脚手架核对。
   const search = execFileSync(
     process.execPath,
     /**
@@ -119,9 +118,10 @@ async function seedMemory(vault, memoryRoot, entries) {
   );
   const parsed = JSON.parse(search.slice(search.indexOf('{')));
   return entries.map(entry => {
-    const hit = parsed.hits?.find(item => entry.body.includes(item.title));
-    if (hit === undefined) {
-      throw new Error(`播种后找不到记录：${entry.title}\n可用命中：${JSON.stringify(parsed.hits?.map(h => h.title))}`);
+    const matches = parsed.hits?.filter(item => typeof entry.title === 'string' && item.title === entry.title) ?? [];
+    const hit = matches[0];
+    if (matches.length !== 1 || typeof hit?.id !== 'string' || hit.id === '') {
+      throw new Error(`播种后无法唯一定位标题：${entry.title}\n可用命中：${JSON.stringify(parsed.hits?.map(h => ({ id: h.id, title: h.title })))}`);
     }
     return { id: hit.id, title: entry.title };
   });
@@ -220,7 +220,9 @@ async function main() {
     console.error('缺少 packages/cli/dist/mcp.js，请先运行 node scripts/build.mjs mcp。');
     process.exit(1);
   }
-  const vault = await mkdtemp(path.join(os.tmpdir(), 'mom-mcp-e2e-'));
+  const experiment = path.join(root, '.experiment');
+  await mkdir(experiment, { recursive: true });
+  const vault = await mkdtemp(path.join(experiment, 'mom-mcp-e2e-'));
   const memoryRoot = 'Second Brain';
   const session = startServer(vault);
   try {

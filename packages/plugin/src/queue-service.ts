@@ -51,6 +51,8 @@ import {
   serializeRequest,
   validateReceipt,
   validateRequest,
+  normalizeOrganization,
+  type OrganizationSettings,
   type CommitOutcome,
   type ProcessResult,
   type QueueReceipt,
@@ -71,6 +73,7 @@ export interface QueueServiceOptions {
   store: VaultFileStore;
   /** 记忆根目录（Vault 相对路径）；必须与核心使用同一个值。 */
   memoryRoot: string;
+  organization?: OrganizationSettings;
   /** 提交者身份（写进回执，便于对账）。 */
   owner: string;
   now: () => number;
@@ -98,6 +101,7 @@ export class QueueService {
   private readonly app: App;
   private readonly store: VaultFileStore;
   private readonly root: string;
+  private readonly organization: OrganizationSettings;
   private readonly owner: string;
   private readonly now: () => number;
   private readonly random: () => number;
@@ -124,6 +128,7 @@ export class QueueService {
     this.app = options.app;
     this.store = options.store;
     this.root = assertVaultRelativePath(options.memoryRoot, options.memoryRoot, '记忆根目录');
+    this.organization = normalizeOrganization(options.organization);
     this.owner = options.owner;
     this.now = options.now;
     this.random = options.random;
@@ -174,7 +179,7 @@ export class QueueService {
       expiresAt: new Date(this.now() + ttl).toISOString(),
       idempotencyKey: request.idempotencyKey,
     };
-    const validation = validateRequest(full, { root: this.root });
+    const validation = validateRequest(full, { root: this.root, organization: this.organization });
     const fingerprint = validation.ok ? requestFingerprint(full) : '';
     if (!validation.ok) {
       return {
@@ -207,7 +212,7 @@ export class QueueService {
          * 同 id 的请求已经存在：只在**指纹完全相同**时才算重复入队成功
          * （调用方重发同一条请求）。内容不同必须报错，绝不覆盖。
          */
-        const parsed = parseRequestEnvelope(existingRaw, { root: this.root });
+        const parsed = parseRequestEnvelope(existingRaw, { root: this.root, organization: this.organization });
         if (parsed.request !== null && requestFingerprint(parsed.request) === fingerprint) {
           return { accepted: true, requestId: id, path: relative, fingerprint };
         }
@@ -240,7 +245,7 @@ export class QueueService {
       if (!isReceiptPath(this.root, file.path)) continue;
       const raw = await this.store.readFile(file.path);
       if (raw === null) continue;
-      const parsed = parseReceipt(raw, { root: this.root });
+      const parsed = parseReceipt(raw, { root: this.root, organization: this.organization });
       if (parsed.receipt !== null) receipts.push(parsed.receipt);
     }
     return receipts;
@@ -260,7 +265,7 @@ export class QueueService {
     }
     const raw = await this.store.readFile(relative);
     if (raw === null) return { receipt: null, errors: [] };
-    return parseReceipt(raw, { root: this.root });
+    return parseReceipt(raw, { root: this.root, organization: this.organization });
   }
 
   /**
@@ -322,7 +327,7 @@ export class QueueService {
     for (const entry of pending) {
       const raw = await this.store.readFile(entry.path);
       if (raw === null) continue;
-      const parsed = parseRequestEnvelope(raw, { root: this.root });
+      const parsed = parseRequestEnvelope(raw, { root: this.root, organization: this.organization });
       if (parsed.request === null) {
         result.malformed.push({ path: entry.path, errors: parsed.errors });
         continue;
@@ -432,6 +437,7 @@ export class QueueService {
       now: this.now,
       committedBy: this.owner,
       root: this.root,
+      organization: this.organization,
       findReceipt: current => findExistingReceipt(this.receiptsCache ?? [], current),
       findCommitted:
         this.findCommitted === undefined
@@ -467,7 +473,7 @@ export class QueueService {
    * 内容不同或回执本身不合法时返回 false，让请求留在队列里等人看见。
    */
   private async writeReceipt(receipt: QueueReceipt): Promise<boolean> {
-    const validation = validateReceipt(receipt, { root: this.root });
+    const validation = validateReceipt(receipt, { root: this.root, organization: this.organization });
     if (!validation.ok) return false;
     let relative: string;
     try {
@@ -483,7 +489,7 @@ export class QueueService {
         await this.app.vault.create(relative, serialized);
         return true;
       }
-      const parsed = parseReceipt(existing, { root: this.root });
+      const parsed = parseReceipt(existing, { root: this.root, organization: this.organization });
       if (parsed.receipt !== null && parsed.receipt.fingerprint === receipt.fingerprint) {
         // 回执只写一次；内容完全一致时视为已经落地，不覆盖。
         return true;

@@ -9,7 +9,7 @@
  *
  * ## 自我约束
  *
- * 1. **只关心记忆根之内**：根之外的笔记一个字都不读，不扫描整个库；
+ * 1. **只关心明确绑定的目录**：旧版记忆根或配置的分类目录，不扫描整个库；
  * 2. **跳过自己写入**造成的事件：否则一次提交触发一次刷新，刷新又触发
  *    事件，变成无休止的重载（这是最容易写出的死循环）；
  * 3. **有界合并**：事件先攒进一个集合，安静 `debounceMs` 之后合并成一次
@@ -22,11 +22,12 @@
  * 这个类不认识 Obsidian，定时器与判断都由调用方注入，因此可以确定性地测试。
  */
 
-import { contentHashOf } from '@mom/core';
+import { contentHashOf, isOrganizationPath, type OrganizationSettings } from '@mom/core';
 
 export interface RefreshMonitorOptions {
   /** 记忆根目录（Vault 内相对路径，不带首尾斜杠）。 */
   memoryRoot: string;
+  organization?: OrganizationSettings;
   /** 真正执行重载。抛错会被报给调用方，不会被吞掉。 */
   refresh: () => Promise<void>;
   /** 当前是否不适合重载（例如队列正在提交）。 */
@@ -164,6 +165,9 @@ export class IndexRefreshMonitor {
 
   /** 这个路径是否在记忆根之内（根自身也算）。 */
   touchesRoot(vaultPath: string | null | undefined): boolean {
+    if (this.options.organization?.preset === 'missher') {
+      return isOrganizationPath(this.options.memoryRoot, this.options.organization, vaultPath ?? '');
+    }
     const path = normalize(vaultPath ?? '');
     const root = normalize(this.options.memoryRoot);
     if (path === '' || root === '') return false;

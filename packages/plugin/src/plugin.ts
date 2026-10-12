@@ -16,6 +16,10 @@ import { Notice, Plugin, TFile, type TAbstractFile, type WorkspaceLeaf } from 'o
 import {
   DEFAULT_ROOT,
   assertSafeRoot,
+  normalizeOrganization,
+  organizationFolders,
+  isInsideRoot,
+  type OrganizationSettings,
   mergeSettings,
   defaultSettings,
   readTitle,
@@ -141,6 +145,7 @@ export default class MissherMemoryPlugin extends Plugin {
      */
     this.indexMonitor = new IndexRefreshMonitor({
       memoryRoot: this.service.memoryRoot,
+      organization: this.service.organization,
       refresh: async () => {
         await this.service.load(true);
       },
@@ -496,6 +501,27 @@ ${record.body}`;
   }
 
   /**
+   * 切换目录不能给同一批记忆悄悄换掉删除/幂等账本。
+   * 只检查运行中的配置，不读 Vault，也不移动任何状态或正文。
+   */
+  private organizationSwitchError(nextRoot: string, next: OrganizationSettings): string | null {
+    const activeRoot = this.service.memoryRoot;
+    const active = this.service.organization;
+    if (nextRoot !== activeRoot) {
+      if (active.preset === 'missher' && active.placement === 'vault') {
+        return '当前使用 Vault 分类布局，不能直接更换记忆根目录：这会切断已有删除记录、请求回执与待审状态。请保留当前根；更换状态根需要专门迁移。';
+      }
+      const before = organizationFolders(activeRoot, active);
+      const after = organizationFolders(nextRoot, next);
+      if (before.some(oldFolder => after.some(newFolder => isInsideRoot(oldFolder, newFolder) || isInsideRoot(newFolder, oldFolder)))) {
+        return '新旧方案包含重叠的记忆目录，但使用不同的状态根。为保留删除记录、请求回执与待审状态，本次切换已拒绝；请保持原根或进行专门迁移。';
+      }
+    }
+    if (this.service.writeQueue.busy()) return '外部请求正在提交，请处理完成后再切换目录或分类。';
+    return null;
+  }
+
+  /**
    * 切换记忆根目录。
    *
    * 语义边界（写进提示，也写在这里，避免将来被"顺手"改成静默迁移）：
@@ -521,12 +547,10 @@ ${record.body}`;
       this.service.notify(`路径已规范化为「${safe}」，请确认后再次点击「应用」。`);
       return { ok: false, message: `路径会被规范化为「${safe}」。确认后再次点击「应用」。`, reloading: false };
     }
-    /**
-     * 先落盘、再重载：如果用户拒绝重载，我们要把设置改回去，
-     * 否则下次启动会悄悄用新根，而用户以为自己取消了。
-     */
-    const previous = this.momSettings.root;
-    await this.updateSettings({ root: safe }, { quiet: true });
+    // 保存时会保留已保存的分类配置；安全判断始终同时参考正在运行的方案。
+    const organization = normalizeOrganization(this.momSettings.organization);
+    const blocked = this.organizationSwitchError(safe, organization);
+    if (blocked !== null) return { ok: false, message: blocked, reloading: false };
     const confirmed = await confirmReload(
       this.app,
       `记忆根目录将从「${active}」改为「${safe}」。\n\n` +
@@ -535,17 +559,25 @@ ${record.body}`;
         '现在重载插件吗？选择「取消」将放弃这次改动，继续使用原目录。',
     );
     if (!confirmed) {
-      await this.updateSettings({ root: previous }, { quiet: true });
       return {
         ok: false,
         message: `已放弃改动，继续使用「${active}」。`,
         reloading: false,
       };
     }
+    // 确认框打开期间轮询可能开始提交；不能只依赖弹窗前的 busy 检查。
+    const blockedAfterConfirmation = this.organizationSwitchError(safe, organization);
+    if (blockedAfterConfirmation !== null) return { ok: false, message: blockedAfterConfirmation, reloading: false };
+    const updated = { ...this.momSettings, root: safe, organization };
+    try {
+      await this.saveData(updated);
+    } catch (error) {
+      return { ok: false, message: `记忆根目录未保存：${error instanceof Error ? error.message : String(error)}`, reloading: false };
+    }
+    this.momSettings = updated;
     const reload = (this.app as unknown as { commands?: { executeCommandById?: (id: string) => boolean } }).commands
       ?.executeCommandById;
-    if (typeof reload === 'function') {
-      reload.call((this.app as unknown as { commands: unknown }).commands, 'app:reload');
+    if (typeof reload === 'function' && reload.call((this.app as unknown as { commands: unknown }).commands, 'app:reload') === true) {
       return { ok: true, message: `正在重载插件以使用「${safe}」…`, reloading: true };
     }
     // 拿不到重载命令时如实说：设置已保存，但要用户自己重启 Obsidian。
@@ -566,6 +598,43 @@ ${record.body}`;
       dailyHours: settings.review.triggers.dailyHours,
       weeklyHours: settings.review.triggers.weeklyHours,
     });
+  }
+
+  /** 分类和根一起保存；运行中的服务保持冻结，重载后才切换，不搬迁旧文件。 */
+  async applyOrganization(next: OrganizationSettings, nextRoot = this.service.memoryRoot): Promise<{ ok: boolean; message: string }> {
+    let root: string;
+    let organization: OrganizationSettings;
+    let folders: string[];
+    try {
+      root = assertSafeRoot(nextRoot);
+      organization = normalizeOrganization(next);
+      folders = organizationFolders(root, organization);
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+    const blocked = this.organizationSwitchError(root, organization);
+    if (blocked !== null) return { ok: false, message: blocked };
+    const confirmed = await confirmReload(this.app,
+      `将使用以下分类目录：\n${folders.join('\n')}\n\n` +
+      `索引、队列和删除记录保存在 ${root}/.memory。\n` +
+      '只管理有记忆元数据的文件；普通旧笔记保持原样。更换目录或分类不会自动迁移旧文件。\n\n' +
+      '保存后重载应用以生效？取消会保留原设置。');
+    if (!confirmed) return { ok: false, message: '已取消，分类设置没有改变。' };
+    const blockedAfterConfirmation = this.organizationSwitchError(root, organization);
+    if (blockedAfterConfirmation !== null) return { ok: false, message: blockedAfterConfirmation };
+    const previous = this.momSettings;
+    const updated = { ...previous, root, organization };
+    try {
+      await this.saveData(updated);
+    } catch (error) {
+      return { ok: false, message: `分类设置未保存：${error instanceof Error ? error.message : String(error)}` };
+    }
+    this.momSettings = updated;
+    const commands = (this.app as unknown as { commands?: { executeCommandById?: (id: string) => boolean } }).commands;
+    if (commands?.executeCommandById?.('app:reload') === true) {
+      return { ok: true, message: '分类设置已保存，正在重载应用。' };
+    }
+    return { ok: true, message: '分类设置已保存，当前仍使用旧方案；请重新加载应用后使用新分类。' };
   }
 
   /** 重绘所有工作台视图。 */
@@ -962,6 +1031,7 @@ ${record.body}`;
     if (!this.service.store.isOperational) {
       return { allowed: false, reason: `存储不可操作：${this.service.store.operationalBlockReason}` };
     }
+    if (record.meta.category === 'template') return { allowed: false, reason: '模板不作为事实发送给模型。' };
     if (record.invalid === true) return { allowed: false, reason: '记录元数据无法解释（invalid）。' };
     if (record.meta.allow_model !== true) return { allowed: false, reason: '这条记录设置为不发送给模型（allow_model=false）。' };
     if (record.meta.status !== 'confirmed') return { allowed: false, reason: `状态是 ${record.meta.status}，不是已确认事实。` };

@@ -10,7 +10,7 @@
  * - 所有路径相对 Vault，拒绝 `..`、绝对路径与符号链接逃逸。
  * - `--scope` 决定可见范围；**不传时只看 personal**，不会跨项目。
  * - 显式 `remember` 是用户动作授权（等价于 UI 上的按钮），不经过文本关键词猜测。
- * - 不提供任意文件访问：只能读写记忆根目录之内。
+ * - 不提供任意文件访问：目录范围来自明确的本地启动配置。
  */
 
 import { promises as fs } from 'node:fs';
@@ -31,6 +31,7 @@ import {
   resolveInsideRoot,
   runLocalReview,
   type MemoryKind,
+  type OrganizationSettings,
   type MemoryStatus,
   type WriteOperation,
   type ScopeFilter,
@@ -38,6 +39,7 @@ import {
 } from '@mom/core';
 import { NodeFileStore } from './node-store.js';
 import { ExternalQueueClient, RECEIPT_LABELS } from './external-queue.js';
+import { categoryFrom, organizationFromStartup } from './organization-options.js';
 
 interface ParsedArgs {
   command: string;
@@ -174,7 +176,7 @@ async function submitWrite(
       : explicitRevision ?? context.store.get(targetId)?.meta.revision ?? null;
   const idempotencyKey =
     context.args.flags.get('idempotency-key') ??
-    `${input.operation}:${targetId ?? 'new'}:${expectedHash ?? 'none'}:${String(input.payload.body ?? input.payload.replacement ?? '').slice(0, 64)}`;
+    `${input.operation}:${targetId ?? 'new'}:${expectedHash ?? 'none'}:${input.payload.category === undefined ? '' : `${String(input.payload.category)}:`}${String(input.payload.body ?? input.payload.replacement ?? '').slice(0, 64)}`;
 
   const outcome = await context.queue.enqueue({
     operation: input.operation,
@@ -246,7 +248,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (args.command === 'version') {
-    process.stdout.write('mom-memory 0.1.1\n');
+    process.stdout.write('mom-memory 0.2.0\n');
     return 0;
   }
   if (!(COMMANDS as readonly string[]).includes(args.command)) {
@@ -262,20 +264,23 @@ async function main(argv: string[]): Promise<number> {
   const root = args.flags.get('root') ?? process.env.MOM_ROOT ?? DEFAULT_ROOT;
 
   let fileStore: NodeFileStore;
+  let organization: OrganizationSettings;
   try {
-    fileStore = await NodeFileStore.open({ vaultRoot: vault, memoryRoot: root });
+    organization = organizationFromStartup(args.flags);
+    categoryFrom(args.flags.get('category'));
+    fileStore = await NodeFileStore.open({ vaultRoot: vault, memoryRoot: root, organization });
   } catch (error) {
     fail(messageOf(error));
     return 2;
   }
 
-  const store = new MemoryStore({ store: fileStore, root });
+  const store = new MemoryStore({ store: fileStore, root, organization });
   const scopeFilters = parseScopeFilters(args);
   const json = args.flags.get('json') === 'true';
   const direct = args.flags.get('direct') === 'true';
   if (direct) warnDirectWrite();
   const writeContext: WriteContext = {
-    queue: new ExternalQueueClient({ vaultRoot: vault, memoryRoot: root }),
+    queue: new ExternalQueueClient({ vaultRoot: fileStore.resolvedVaultRoot, memoryRoot: root, organization }),
     args,
     json,
     direct,
@@ -335,6 +340,8 @@ async function main(argv: string[]): Promise<number> {
             operation: 'remember',
             payload: {
               body: requireText(args),
+              ...(args.flags.get('title') === undefined ? {} : { title: args.flags.get('title')! }),
+              ...(args.flags.get('category') === undefined ? {} : { category: categoryFrom(args.flags.get('category')) }),
               ...(args.flags.get('kind') === undefined ? {} : { kind: args.flags.get('kind')! }),
               ...(args.flags.get('scope') === undefined ? {} : { scope: args.flags.get('scope')! }),
               ...(args.flags.get('scope-ref') === undefined ? {} : { scope_ref: args.flags.get('scope-ref')! }),
@@ -350,7 +357,12 @@ async function main(argv: string[]): Promise<number> {
         case 'propose':
           return await submitWrite(writeContext, {
             operation: 'propose',
-            payload: { body: requireText(args), kind: args.flags.get('kind') ?? 'note' },
+            payload: {
+              body: requireText(args), kind: args.flags.get('kind') ?? 'note',
+              ...(args.flags.get('title') === undefined ? {} : { title: args.flags.get('title')! }),
+              ...(args.flags.get('category') === undefined ? {} : { category: categoryFrom(args.flags.get('category')) }),
+              ...(args.flags.get('no-allow-model') === 'true' ? { allow_model: false } : {}),
+            },
           });
         case 'update':
           return await submitWrite(writeContext, {
@@ -569,6 +581,7 @@ async function cmdRemember(store: MemoryStore, args: ParsedArgs, json: boolean, 
 
   const draft = {
     body,
+    category: categoryFrom(args.flags.get('category')),
     title: args.flags.get('title'),
     kind,
     scope,
@@ -1308,7 +1321,7 @@ function fail(message: string): void {
 }
 
 function printHelp(): void {
-  process.stdout.write(`mom-memory 0.1.1 —— Missher Obsidian Memory 的独立命令行入口
+  process.stdout.write(`mom-memory 0.2.0 —— Missher Obsidian Memory 的独立命令行入口
 
 用法：
   mom-memory <命令> --vault <Vault绝对路径> [选项]
@@ -1316,6 +1329,9 @@ function printHelp(): void {
 必需参数：
   --vault <路径>        Vault（或任意受控目录）的绝对路径。也可用环境变量 MOM_VAULT。
   --root <相对路径>     记忆根目录，默认 ${DEFAULT_ROOT}。也可用 MOM_ROOT。
+  --layout legacy|missher  文件组织预设，默认 legacy。也可用 MOM_LAYOUT。
+  --placement root|vault  分类放在记忆根内或 Vault 并列目录，默认 root。也可用 MOM_PLACEMENT。
+  --folders-json <JSON>   分类到相对目录的覆盖对象，也可用 MOM_FOLDERS_JSON；须与插件配置一致。
 
 范围控制（默认只查 personal，绝不隐式跨项目）：
   --scope personal | project:<名称> | context:<名称>   （可重复）
@@ -1325,6 +1341,8 @@ function printHelp(): void {
                   --text "..." | --file <路径> | --stdin
                   --from-history   标记为回放历史：会经过护栏并被拒绝
   propose       生成待确认候选（AI/外部输入用），默认 pending
+                  remember/propose 可加 --category <分类标识>，如 memory、profile、workflow、lesson。
+                  --title <短标题> 可单独指定标题（最多 300 字符）。
   search        检索（默认排除 pending 与过期）
                   --text "..." --limit N --include-pending --tag X --kind fact
   get           输出某条记忆的原始 Markdown          --id <id>
@@ -1356,7 +1374,7 @@ function printHelp(): void {
 
 安全边界：
   · 所有路径相对 Vault，拒绝 ..、绝对路径与符号链接逃逸。
-  · 只读写记忆根目录之内；没有任意文件访问。
+  · 只访问记忆根及启动时明确配置的分类目录；状态与队列仍在记忆根内。
   · 与 Obsidian 插件共用同一核心与同一套写入比较逻辑。
 `);
 }

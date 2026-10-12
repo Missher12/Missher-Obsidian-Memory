@@ -8,14 +8,13 @@
  * + `queue-service.ts` + `vault-store.ts`），只把 Obsidian 的 API 换成合成桩。
  * 这样才叫闭环：外部进程排队、插件提交、回执回读，三方都是真代码。
  *
- * 全程在仓库外的临时合成库中进行，不碰任何真实 Vault。
+ * 全程在本仓库 .experiment 下的唯一临时合成库中进行，不碰任何真实 Vault。
  */
 
 import { spawn } from 'node:child_process';
 import { buildPluginCommitHarness } from './plugin-commit-harness.mjs';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,7 +90,9 @@ async function main() {
     console.error('缺少 packages/cli/dist/cli.js，请先运行 node scripts/build.mjs cli。');
     process.exit(1);
   }
-  const vault = await mkdtemp(path.join(os.tmpdir(), 'mom-cli-e2e-'));
+  const experiment = path.join(root, '.experiment');
+  await mkdir(experiment, { recursive: true });
+  const vault = await mkdtemp(path.join(experiment, 'mom-cli-e2e-'));
   const memoryRoot = 'Second Brain';
   try {
     /* ---------- 1. 参数与边界 ---------- */

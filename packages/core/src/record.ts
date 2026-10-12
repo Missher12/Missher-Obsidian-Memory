@@ -45,10 +45,12 @@ import {
 } from './yaml.js';
 import {
   MEMORY_KINDS,
+  MEMORY_CATEGORIES,
   SCOPE_KINDS,
   SOURCE_KINDS,
   MEMORY_STATUSES,
   type MemoryKind,
+  type MemoryCategory,
   type MemoryMeta,
   type MemoryRecord,
   type MemoryStatus,
@@ -66,6 +68,7 @@ export const MAX_CHANGELOG_ENTRIES = 40;
 export const MANAGED_KEYS: readonly string[] = [
   'id',
   'kind',
+  'category',
   'status',
   'scope',
   'scope_ref',
@@ -94,6 +97,7 @@ export interface ParseIssue {
     | 'bad_frontmatter'
     | 'missing_id'
     | 'unknown_kind'
+    | 'unknown_category'
     | 'unknown_status'
     | 'unknown_scope'
     | 'unknown_source_kind'
@@ -296,6 +300,14 @@ export function parseMemoryFile(path: string, raw: string): ParseResult {
   const extraFrontmatter: Array<[string, YamlValue]> = doc.entries.filter(([key]) => !MANAGED_KEYS.includes(key));
 
   const invalidReasons: string[] = [];
+  const categoryRaw = get('category');
+  const category = typeof categoryRaw === 'string' && MEMORY_CATEGORIES.includes(categoryRaw as MemoryCategory)
+    ? categoryRaw as MemoryCategory : undefined;
+  if (categoryRaw !== undefined && category === undefined) {
+    const message = 'category 不是已知的文件组织分类，请修复后再使用本条记忆。';
+    invalidReasons.push(message);
+    issues.push({ code: 'unknown_category', message, fatal: true });
+  }
   const id = asString(get('id')).trim();
   if (!id) {
     issues.push({ code: 'missing_id', message: '缺少 id 字段，无法建立稳定标识。' });
@@ -390,6 +402,7 @@ export function parseMemoryFile(path: string, raw: string): ParseResult {
   const meta: MemoryMeta = {
     id: id || '',
     kind,
+    ...(category === undefined ? {} : { category }),
     status,
     scope,
     scope_ref: asString(get('scope_ref')).trim(),
@@ -533,6 +546,7 @@ export function serializeMemoryFile(record: MemoryRecord, options: SerializeOpti
     entries: [
       ['id', record.meta.id],
       ['kind', record.meta.kind],
+      ...(record.meta.category === undefined ? [] : [['category', record.meta.category] as [string, YamlValue]]),
       ['status', record.meta.status],
       ['scope', record.meta.scope],
       ['scope_ref', record.meta.scope_ref],

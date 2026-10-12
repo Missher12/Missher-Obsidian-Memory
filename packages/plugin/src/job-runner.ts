@@ -717,6 +717,9 @@ export class AiJobRunner {
     if (!this.store.isOperational) {
       return { allowed: false, reason: `存储当前不可操作：${this.store.operationalBlockReason}` };
     }
+    if (record.meta.category === 'template') {
+      return { allowed: false, reason: '模板不作为事实参与模型作业。' };
+    }
     if (record.invalid === true) {
       return { allowed: false, reason: '记录的元数据无法解释（invalid），不参与。' };
     }

@@ -10,7 +10,7 @@
  * 每个结果都附带 `reasons`，工作台可以解释“为什么返回它”。
  */
 
-import type { MemoryKind, MemoryRecord, MemoryStatus, ScopeFilter, ScopeKind } from './types.js';
+import type { MemoryCategory, MemoryKind, MemoryRecord, MemoryStatus, ScopeFilter, ScopeKind } from './types.js';
 import { tokenize, tokenizeFields, type FieldTokens } from './tokenize.js';
 import { extractTitle } from './record.js';
 
@@ -19,6 +19,7 @@ export interface IndexDocument {
   path: string;
   title: string;
   kind: MemoryKind;
+  category?: MemoryCategory;
   status: MemoryStatus;
   scope: ScopeKind;
   scope_ref: string;
@@ -94,6 +95,7 @@ export class MemoryIndex {
       path: record.path,
       title,
       kind: record.meta.kind,
+      category: record.meta.category,
       status: record.meta.status,
       scope: record.meta.scope,
       scope_ref: record.meta.scope_ref,
@@ -205,6 +207,11 @@ export class MemoryIndex {
          * 不透露是哪一个项目。
          */
         excluded.scope += 1;
+        continue;
+      }
+      if (doc.category === 'template') {
+        excluded.kind += 1;
+        notes.push(note(doc, 'template', '模板描述记录结构，不作为已发生的事实召回。'));
         continue;
       }
       if (doc.forgotten) {
@@ -443,6 +450,7 @@ export interface SearchNote {
   code:
     | 'scope_mismatch'
     | 'status_excluded'
+    | 'template'
     | 'kind_excluded'
     | 'tag_excluded'
     | 'no_term_match'

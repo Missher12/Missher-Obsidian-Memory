@@ -33,6 +33,7 @@ export interface ProfileView {
   sections: ProfileSection[];
   /** 因过期、待确认、争议被排除的计数，如实说明。 */
   excluded: {
+    template: number;
     pending: number;
     disputed: number;
     archived: number;
@@ -71,6 +72,7 @@ export function buildProfileView(
 ): ProfileView {
   const now = options.now ?? Date.now();
   const excluded = {
+    template: 0,
     pending: 0,
     disputed: 0,
     archived: 0,
@@ -91,6 +93,10 @@ export function buildProfileView(
      * 尚未生效（valid_from 在未来）的记录照样被写成“已确认概览”，
      * 等于用一个派生视图绕过了检索侧的隔离。
      */
+    if (record.meta.category === 'template') {
+      excluded.template += 1;
+      continue;
+    }
     if (record.invalid === true) {
       excluded.invalid += 1;
       continue;

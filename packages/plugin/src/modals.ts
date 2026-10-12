@@ -10,6 +10,8 @@ import { Modal, Notice, Setting, type App } from 'obsidian';
 import {
   describeSuggestion,
   renderSourcesBlock,
+  MISSHER_CATEGORY_LABELS,
+  type MemoryCategory,
   type MemoryRecord,
   type ReviewSuggestion,
 } from '@mom/core';
@@ -18,6 +20,8 @@ import type MissherMemoryPlugin from './plugin.js';
 export class QuickCaptureModal extends Modal {
   private readonly plugin: MissherMemoryPlugin;
   private text = '';
+  private title = '';
+  private category: MemoryCategory | '' = '';
   private kind = 'note';
   private scopeChoice: 'personal' | 'project' | 'context' = 'personal';
   private scopeRef = '';
@@ -36,6 +40,17 @@ export class QuickCaptureModal extends Modal {
       cls: 'mom-hint',
       text: '直接写下来即可。候选会进入「待确认」，由你确认后才成为权威事实。',
     });
+
+    new Setting(contentEl).setName('标题（可选）').setDesc('用简短主题命名；留空时从内容生成。')
+      .addText(text => text.setValue(this.title).onChange(value => { this.title = value; }));
+    if (this.plugin.service.organization.preset === 'missher') {
+      new Setting(contentEl).setName('文件夹分类').setDesc('只决定存放位置；确认状态和适用范围另行设置。')
+        .addDropdown(dropdown => {
+          dropdown.addOption('', '按内容类型自动选择');
+          for (const [key, label] of Object.entries(MISSHER_CATEGORY_LABELS)) dropdown.addOption(key, label);
+          dropdown.setValue(this.category).onChange(value => { this.category = value as MemoryCategory | ''; });
+        });
+    }
 
     new Setting(contentEl)
       .setName('内容')
@@ -100,6 +115,8 @@ export class QuickCaptureModal extends Modal {
         }
         const draft = {
           body: trimmed,
+          ...(this.title.trim() === '' ? {} : { title: this.title.trim() }),
+          ...(this.category === '' ? {} : { category: this.category }),
           kind: this.kind as MemoryRecord['meta']['kind'],
           scope: this.scopeChoice,
           scopeRef: this.scopeChoice === 'personal' ? '' : this.scopeRef.trim(),
@@ -110,6 +127,7 @@ export class QuickCaptureModal extends Modal {
           ? await this.plugin.service.store.propose(draft)
           : await this.plugin.service.store.remember(draft);
         new Notice(result.message);
+        if (!result.ok) return;
         this.close();
         await this.plugin.refreshViews();
       });

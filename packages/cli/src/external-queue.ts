@@ -29,6 +29,7 @@ import {
   assertVaultRelativePath,
   isRequestExpired,
   makeRequestId,
+  normalizeOrganization,
   parseReceipt,
   parseRequestEnvelope,
   receiptDirPath,
@@ -40,9 +41,12 @@ import {
   validateRequest,
   type QueueReceipt,
   type QueueRequest,
+  type QueueValidationOptions,
+  type OrganizationSettings,
   type ReceiptStatus,
   type WriteOperation,
 } from '@mom/core';
+import { NodeFileStore } from './node-store.js';
 
 export interface EnqueueInput {
   operation: WriteOperation;
@@ -73,10 +77,23 @@ export interface EnqueueOutcome {
 export class ExternalQueueClient {
   private readonly vaultRoot: string;
   private readonly memoryRoot: string;
+  private readonly organization: OrganizationSettings;
+  private nodeStore: Promise<NodeFileStore> | null = null;
 
-  constructor(options: { vaultRoot: string; memoryRoot: string }) {
+  constructor(options: { vaultRoot: string; memoryRoot: string; organization?: OrganizationSettings }) {
     this.vaultRoot = options.vaultRoot;
     this.memoryRoot = options.memoryRoot;
+    this.organization = normalizeOrganization(options.organization);
+  }
+
+  private get validationOptions(): QueueValidationOptions {
+    return { root: this.memoryRoot, organization: this.organization };
+  }
+
+  /** 分类目录不改变状态目录；队列每次 IO 前仍做原根的 realpath 边界检查。 */
+  private async statePath(relative: string): Promise<string> {
+    this.nodeStore ??= NodeFileStore.open({ vaultRoot: this.vaultRoot, memoryRoot: this.memoryRoot, organization: this.organization });
+    return (await this.nodeStore).resolveStatePath(relative);
   }
 
   /**
@@ -103,7 +120,7 @@ export class ExternalQueueClient {
       expiresAt: new Date(now + (input.ttlMs ?? DEFAULT_REQUEST_TTL_MS)).toISOString(),
     };
 
-    const validation = validateRequest(request, { root: this.memoryRoot });
+    const validation = validateRequest(request, this.validationOptions);
     if (!validation.ok) {
       return {
         accepted: false,
@@ -117,14 +134,14 @@ export class ExternalQueueClient {
     const fingerprint = requestFingerprint(request);
     const relative = requestPath(this.memoryRoot, requestId);
     assertVaultRelativePath(this.memoryRoot, relative, '请求路径');
-    const absolute = path.join(this.vaultRoot, relative);
+    const absolute = await this.statePath(relative);
 
     await fs.mkdir(path.dirname(absolute), { recursive: true });
 
     // 同 id 已经存在：内容一致算重复提交，内容不同一律拒绝。
     const existingSameId = await readIfExists(absolute);
     if (existingSameId !== null) {
-      const existing = readEnvelopeFingerprint(existingSameId);
+      const existing = readEnvelopeFingerprint(existingSameId, this.validationOptions);
       if (existing !== null && existing.fingerprint === fingerprint) {
         return { accepted: true, requestId, path: relative, fingerprint, duplicate: true };
       }
@@ -186,7 +203,8 @@ export class ExternalQueueClient {
 
   /** 按指纹找一条已经在排队的请求（避免重复排队）。 */
   private async findByFingerprint(fingerprint: string): Promise<string | null> {
-    const dir = path.join(this.vaultRoot, requestDirPath(this.memoryRoot));
+    const relativeDir = requestDirPath(this.memoryRoot);
+    const dir = await this.statePath(relativeDir);
     let names: string[];
     try {
       names = await fs.readdir(dir);
@@ -195,9 +213,9 @@ export class ExternalQueueClient {
     }
     for (const name of names) {
       if (!name.endsWith('.md')) continue;
-      const raw = await readIfExists(path.join(dir, name));
+      const raw = await readIfExists(await this.statePath(`${relativeDir}/${name}`));
       if (raw === null) continue;
-      const info = readEnvelopeFingerprint(raw);
+      const info = readEnvelopeFingerprint(raw, this.validationOptions);
       if (info !== null && info.fingerprint === fingerprint) return info.id;
     }
     return null;
@@ -205,16 +223,17 @@ export class ExternalQueueClient {
 
   /** 读取回执（只读；文件不存在返回 null）。 */
   async readReceipt(requestId: string): Promise<QueueReceipt | null> {
-    const absolute = path.join(this.vaultRoot, receiptPath(this.memoryRoot, requestId));
+    const absolute = await this.statePath(receiptPath(this.memoryRoot, requestId));
     const raw = await readIfExists(absolute);
     if (raw === null) return null;
-    const parsed = parseReceipt(raw, { root: this.memoryRoot });
+    const parsed = parseReceipt(raw, this.validationOptions);
     return parsed.receipt;
   }
 
   /** 列出最近的回执（按文件名倒序，最多 limit 条）。 */
   async listReceipts(limit = 20): Promise<QueueReceipt[]> {
-    const dir = path.join(this.vaultRoot, receiptDirPath(this.memoryRoot));
+    const relativeDir = receiptDirPath(this.memoryRoot);
+    const dir = await this.statePath(relativeDir);
     let names: string[];
     try {
       names = await fs.readdir(dir);
@@ -224,9 +243,9 @@ export class ExternalQueueClient {
     const out: QueueReceipt[] = [];
     for (const name of names.sort().reverse().slice(0, limit)) {
       if (!name.endsWith('.md')) continue;
-      const raw = await readIfExists(path.join(dir, name));
+      const raw = await readIfExists(await this.statePath(`${relativeDir}/${name}`));
       if (raw === null) continue;
-      const parsed = parseReceipt(raw, { root: this.memoryRoot });
+      const parsed = parseReceipt(raw, this.validationOptions);
       if (parsed.receipt !== null) out.push(parsed.receipt);
     }
     return out;
@@ -234,7 +253,8 @@ export class ExternalQueueClient {
 
   /** 队列里还没处理的请求数（含已过期但仍保留的）。 */
   async pendingCount(): Promise<{ pending: number; expired: number }> {
-    const dir = path.join(this.vaultRoot, requestDirPath(this.memoryRoot));
+    const relativeDir = requestDirPath(this.memoryRoot);
+    const dir = await this.statePath(relativeDir);
     let names: string[];
     try {
       names = await fs.readdir(dir);
@@ -246,9 +266,9 @@ export class ExternalQueueClient {
     const now = Date.now();
     for (const name of names) {
       if (!name.endsWith('.md')) continue;
-      const raw = await readIfExists(path.join(dir, name));
+      const raw = await readIfExists(await this.statePath(`${relativeDir}/${name}`));
       if (raw === null) continue;
-      const info = readEnvelopeFingerprint(raw);
+      const info = readEnvelopeFingerprint(raw, this.validationOptions);
       if (info === null) continue;
       pending += 1;
       if (isRequestExpired({ expiresAt: info.expiresAt }, now)) expired += 1;
@@ -284,12 +304,12 @@ export class ExternalQueueClient {
  * 复用核心的 `parseRequestEnvelope`（插件处理请求时用的是同一个解析器），
  * 因此外部看到的「这条请求是什么」和插件执行的是同一个理解。
  */
-function readEnvelopeFingerprint(raw: string): {
+function readEnvelopeFingerprint(raw: string, options: QueueValidationOptions): {
   id: string;
   fingerprint: string;
   expiresAt: string;
 } | null {
-  const parsed = parseRequestEnvelope(raw);
+  const parsed = parseRequestEnvelope(raw, options);
   if (parsed.request === null) return null;
   return {
     id: parsed.request.id,

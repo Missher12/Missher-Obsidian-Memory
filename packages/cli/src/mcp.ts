@@ -12,7 +12,7 @@
  *
  * 边界：
  * - 必须给 `--vault`（或环境变量 MOM_VAULT）；不给就报错退出，不猜用户库。
- * - 不提供任意文件读写工具：所有路径都在记忆根之内。
+ * - 不提供任意文件读写工具：目录范围由本地启动配置确定，工具不能自行扩大。
  * - 不支持 `--direct`：MCP 面向 AI 客户端，不能给它绕过队列直写用户笔记的能力。
  *   需要直写的人请用 CLI，并在命令行上显式承担风险。
  *
@@ -23,35 +23,40 @@
 import path from 'node:path';
 import {
   DEFAULT_ROOT,
+  MEMORY_CATEGORIES,
   MemoryStore,
   SCOPE_KINDS,
   evaluateGuard,
-  normalizePath,
   readTitle,
   sha256Hex,
   type GuardSourceKind,
   type MemoryRecord,
+  type OrganizationSettings,
   type QueueReceipt,
   type ScopeFilter,
   type ScopeKind,
 } from '@mom/core';
 import { NodeFileStore } from './node-store.js';
 import { ExternalQueueClient, RECEIPT_LABELS } from './external-queue.js';
+import { categoryFrom, organizationFromStartup } from './organization-options.js';
 
 const NAME = 'missher-obsidian-memory';
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 /* ------------------------------------------------------------------ */
 /* 参数                                                                */
 /* ------------------------------------------------------------------ */
 
-function parseArgs(argv: string[]): { vault: string; root: string } {
+function parseArgs(argv: string[]): { vault: string; root: string; organization: OrganizationSettings } {
   const flags = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === undefined || !token.startsWith('--')) continue;
-    const [rawKey, inline] = token.slice(2).split('=');
+    const body = token.slice(2);
+    const separator = body.indexOf('=');
+    const rawKey = separator < 0 ? body : body.slice(0, separator);
+    const inline = separator < 0 ? undefined : body.slice(separator + 1);
     const value = inline ?? argv[index + 1] ?? '';
     if (inline === undefined) index += 1;
     flags.set(rawKey ?? '', value);
@@ -63,10 +68,11 @@ function parseArgs(argv: string[]): { vault: string; root: string } {
       'MCP 服务器需要 --vault <库目录>（或环境变量 MOM_VAULT）。没有默认值：不会猜你的库在哪。',
     );
   }
-  const rootFlag = flags.get('root') ?? DEFAULT_ROOT;
+  const rootFlag = flags.get('root') ?? process.env.MOM_ROOT ?? DEFAULT_ROOT;
   return {
     vault: path.resolve(vault),
-    root: normalizePath(typeof rootFlag === 'string' ? rootFlag : DEFAULT_ROOT),
+    root: typeof rootFlag === 'string' ? rootFlag : DEFAULT_ROOT,
+    organization: organizationFromStartup(flags),
   };
 }
 
@@ -120,10 +126,10 @@ const scopeFrom = (args: Record<string, unknown> | undefined): ScopeFilter | nul
  * 并且**默认不允许直写**——MCP 没有 `--direct` 开关，写请求只能排队。
  */
 const context = async (): Promise<{ store: MemoryStore; queue: ExternalQueueClient }> => {
-  const fileStore = await NodeFileStore.open({ vaultRoot: config.vault, memoryRoot: config.root });
-  const store = new MemoryStore({ store: fileStore, root: config.root });
+  const fileStore = await NodeFileStore.open({ vaultRoot: config.vault, memoryRoot: config.root, organization: config.organization });
+  const store = new MemoryStore({ store: fileStore, root: config.root, organization: config.organization });
   await store.load();
-  const queue = new ExternalQueueClient({ vaultRoot: config.vault, memoryRoot: config.root });
+  const queue = new ExternalQueueClient({ vaultRoot: fileStore.resolvedVaultRoot, memoryRoot: config.root, organization: config.organization });
   return { store, queue };
 };
 
@@ -157,6 +163,7 @@ const admitForModel = (store: MemoryStore, record: MemoryRecord): Admission => {
     return { allowed: false, reason: `存储不可操作：${store.operationalBlockReason ?? '存在致命读盘问题'}` };
   }
   if (record.invalid === true) return { allowed: false, reason: '元数据无法解释（invalid）' };
+  if (record.meta.category === 'template') return { allowed: false, reason: '模板仅用于结构参考，不作为已确认事实发送给模型' };
   if (record.meta.status !== 'confirmed') {
     return { allowed: false, reason: `状态是 ${record.meta.status}，不是已确认事实` };
   }
@@ -361,11 +368,13 @@ const TOOLS = [
       type: 'object',
       properties: {
         text: { type: 'string', description: '记忆正文（必填）。' },
+        title: { type: 'string', minLength: 1, maxLength: 300, description: '可选短标题（最多 300 字符）；正文保留完整内容。' },
         pending: {
           type: 'boolean',
           description: 'true 表示只生成待确认候选（队列操作 propose），默认 false（remember）。',
         },
         kind: { type: 'string', description: '记忆类型，如 fact、decision、preference、todo。' },
+        category: { type: 'string', enum: MEMORY_CATEGORIES, description: '内容分类；目录由本地启动配置决定，不能在工具中指定路径。' },
         scope: { type: 'string', description: '范围，默认 personal；项目范围写 project:<名称>。' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
         sourceRef: { type: 'string', description: '来源引用（可追溯用），例如文档地址或会话 id。' },
@@ -491,6 +500,9 @@ const text = (value: unknown): ToolResult => ({
 });
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  for (const key of ['organization', 'layout', 'placement', 'folders', 'folders-json', 'root', 'vault']) {
+    if (Object.hasOwn(args, key)) throw new Error(`${key} 只能由本地启动配置指定，工具调用不能改变目录范围。`);
+  }
   const { store, queue } = await context();
   switch (name) {
     case 'memory_search': {
@@ -642,6 +654,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<To
       if (body.trim() === '') throw new Error('memory_remember 需要非空的 text。');
       const scope = scopeFrom(args);
       const kind = typeof args?.kind === 'string' ? args.kind : undefined;
+      const category = categoryFrom(args?.category);
       const scopePart = scope === null ? 'personal' : `${scope.scope}:${scope.ref ?? ''}`;
       /**
        * `pending: true` 走 propose（候选，需要用户确认），否则走 remember（已确认事实）。
@@ -656,7 +669,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<To
         operation: pending ? 'propose' : 'remember',
         payload: {
           body,
+          ...(args?.title === undefined ? {} : { title: args.title }),
           ...(kind === undefined ? {} : { kind }),
+          ...(category === undefined ? {} : { category }),
           ...(Array.isArray(args?.tags) && args.tags.length > 0 ? { tags: args.tags.map(String) } : {}),
           ...(scope === null ? {} : { scope: scope.scope, scope_ref: scope.ref ?? '' }),
           ...(typeof args?.sourceRef === 'string' && args.sourceRef.trim() !== ''
@@ -671,7 +686,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<To
         idempotencyKey:
           typeof args?.idempotencyKey === 'string' && args.idempotencyKey.trim() !== ''
             ? args.idempotencyKey
-            : `mcp:remember:${scopePart}:${body}`,
+            : `mcp:remember:${scopePart}:${category === undefined ? '' : `${category}:`}${body}`,
       });
       if (!result.accepted) throw new Error(`请求未被受理：${result.error ?? '未知原因'}`);
       return text({

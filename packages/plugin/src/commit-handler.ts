@@ -193,6 +193,8 @@ function draftFrom(request: QueueRequest, reader: PayloadReader): MemoryDraft | 
   if (title !== undefined) draft.title = title;
   const kind = reader.string('kind');
   if (kind !== undefined) draft.kind = kind as MemoryDraft['kind'];
+  const category = reader.string('category');
+  if (category !== undefined) draft.category = category as MemoryDraft['category'];
   const scope = reader.string('scope');
   if (scope !== undefined) draft.scope = scope as MemoryDraft['scope'];
   const scopeRef = reader.stringAlias(['scope_ref', 'scopeRef']);

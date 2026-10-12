@@ -29,18 +29,22 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import {
   PathError,
+  assertOrganizationPath,
   assertSafeRelativePath,
   assertSafeRoot,
+  assertVaultRelativePath,
   compareDeleteExpectation,
   compareExpectation,
   isInsideRoot,
   normalizePath,
-  normalizeRoot,
+  normalizeOrganization,
+  organizationFolders,
   readRevision,
   type DeleteExpectation,
   type DeleteResult,
   type FileEntry,
   type FileStore,
+  type OrganizationSettings,
   type WriteExpectation,
   type WriteResult,
 } from '@mom/core';
@@ -50,6 +54,8 @@ export interface NodeStoreOptions {
   vaultRoot: string;
   /** 记忆根目录（Vault 内相对路径）。 */
   memoryRoot: string;
+  /** 可信启动配置：只枚举这里明确允许的分类目录。 */
+  organization?: OrganizationSettings;
   /** 锁租约毫秒数；超过则视为陈旧租约，可以被接管。 */
   lockTtlMs?: number;
   /** 锁等待总时长。 */
@@ -88,6 +94,8 @@ export class NodeFileStore implements FileStore {
   readonly kind = 'node-fs';
   private readonly vaultRoot: string;
   private readonly memoryRoot: string;
+  private readonly organization: OrganizationSettings;
+  private readonly allowedRoots: string[];
   private readonly stateDir: string;
   private readonly lockPath: string;
   private readonly lockTtlMs: number;
@@ -102,6 +110,8 @@ export class NodeFileStore implements FileStore {
   private constructor(options: NodeStoreOptions & { vaultRoot: string; memoryRoot: string }) {
     this.vaultRoot = options.vaultRoot;
     this.memoryRoot = options.memoryRoot;
+    this.organization = normalizeOrganization(options.organization);
+    this.allowedRoots = organizationFolders(this.memoryRoot, this.organization);
     this.stateDir = `${options.memoryRoot}/.memory`;
     this.lockPath = path.join(options.vaultRoot, options.memoryRoot, '.memory', '.lock');
     /**
@@ -201,15 +211,21 @@ export class NodeFileStore implements FileStore {
     if (safe.includes('\uFFFD')) {
       throw new PathError('bad_encoding', `路径包含无法解码的替换字符，已拒绝：${relative}`);
     }
-    if (!isInsideRoot(this.memoryRoot, safe)) {
-      throw new PathError('escape', `路径逃出记忆根目录（${this.memoryRoot}）：${relative}`);
-    }
+    if (isInsideRoot(this.stateDir, safe)) assertVaultRelativePath(this.memoryRoot, safe, '状态路径');
+    else assertOrganizationPath(this.memoryRoot, this.organization, safe);
     const target = path.join(this.vaultRoot, safe);
     const existing = await this.realpathForCheck(target, relative);
-    if (!this.physicallyInsideMemory(existing)) {
-      throw new PathError('symlink_escape', `路径经符号链接逃出记忆根目录：${relative}`);
+    if (!this.physicallyInsideBoundary(existing, safe)) {
+      throw new PathError('symlink_escape', `路径经符号链接逃出允许目录：${relative}`);
     }
     return target;
+  }
+
+  /** 外部队列只允许定位原根下的状态文件，不获得 Markdown 直写权限。 */
+  async resolveStatePath(relative: string): Promise<string> {
+    const safe = assertVaultRelativePath(this.memoryRoot, relative, '状态路径');
+    if (!isInsideRoot(this.stateDir, safe)) throw new PathError('state_escape', '状态路径必须位于记忆根的 .memory 内。');
+    return this.resolve(safe);
   }
 
   /**
@@ -251,17 +267,31 @@ export class NodeFileStore implements FileStore {
     throw new PathError('realpath_depth', `路径层级过深，已拒绝（${label}）。`);
   }
 
-  private physicallyInsideMemory(absolute: string): boolean {
-    const root = path.resolve(this.vaultRoot, this.memoryRoot);
+  private physicallyInsideBoundary(absolute: string, relative: string): boolean {
     const target = path.resolve(absolute);
-    return target === root || target.startsWith(`${root}${path.sep}`);
+    const state = isInsideRoot(this.stateDir, relative);
+    const roots = state ? [this.memoryRoot] : this.allowedRoots;
+    if (!roots.some(folder => {
+      const root = path.resolve(this.vaultRoot, folder);
+      return target === root || target.startsWith(`${root}${path.sep}`);
+    })) return false;
+    // 内容路径也不能通过根内链接读取 .memory 的队列/删除账本。
+    if (!state) {
+      try {
+        assertOrganizationPath(this.memoryRoot, this.organization, this.toVaultRelative(target));
+      } catch {
+        return false;
+      }
+    }
+    return true;
   }
 
   async listFiles(subdir = '', extensions: string[] = ['.md']): Promise<FileEntry[]> {
-    const base = subdir === '' ? this.resolvedMemoryRoot : await this.resolve(subdir);
     const out: FileEntry[] = [];
-    await this.walk(base, out, extensions, 0);
-    return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const roots = subdir === '' ? this.allowedRoots : [subdir];
+    for (const root of roots) await this.walk(await this.resolve(root), out, extensions, 0);
+    return [...new Map(out.map(entry => [entry.path, entry])).values()]
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
 
   private async walk(dir: string, out: FileEntry[], extensions: string[], depth: number): Promise<void> {
@@ -297,11 +327,13 @@ export class NodeFileStore implements FileStore {
     let absolute: string;
     try {
       absolute = await this.resolve(relative);
-    } catch {
+    } catch (error) {
+      // 删除账本/队列状态的路径失效不是“文件不存在”；调用方必须阻断。
+      if (isInsideRoot(this.stateDir, relative)) throw error;
       /**
        * 路径不合法（含符号链接逃逸）在这里返回 null。
        * 调用方只会看到「没有这个文件」，不会看到根外正文——
-       * 这不是静默失败：写入路径走的是 `resolveOrThrow`，会抛出真实原因。
+       * 状态文件与写入路径会抛出真实原因。
        */
       return null;
     }
@@ -359,7 +391,7 @@ export class NodeFileStore implements FileStore {
       }
       // 删除前再核对一次目标真实路径：符号链接被替换时宁可不删。
       const recheck = await this.realpathForCheck(absolute, relative);
-      if (!this.physicallyInsideMemory(recheck)) {
+      if (!this.physicallyInsideBoundary(recheck, relative)) {
         throw new PathError('symlink_escape', `路径在删除前经符号链接逃出记忆根目录：${relative}`);
       }
       await fs.unlink(absolute);
@@ -481,6 +513,7 @@ export class NodeFileStore implements FileStore {
    */
   async acquireLock(): Promise<() => Promise<void>> {
     const deadline = Date.now() + this.lockWaitMs;
+    await this.resolveStatePath(`${this.stateDir}/.lock`);
     await fs.mkdir(path.dirname(this.lockPath), { recursive: true });
     for (;;) {
       const record: LockRecord = {

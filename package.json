@@ -1,6 +1,6 @@
 {
   "name": "missher-obsidian-memory",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "独立的 Obsidian 第二大脑与 AI 记忆插件（OBS-MEM-20261009）",
   "license": "MIT",
@@ -21,7 +21,8 @@
     "package": "node scripts/package.mjs",
     "e2e:cli": "node scripts/e2e-cli.mjs",
     "e2e:mcp": "node scripts/e2e-mcp.mjs",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "e2e:organization": "node scripts/e2e-organization.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

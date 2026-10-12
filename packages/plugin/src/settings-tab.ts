@@ -9,7 +9,11 @@
  */
 
 import { PluginSettingTab, Setting, type App } from 'obsidian';
-import { DEFAULT_ROOT, type PluginSettings } from '@mom/core';
+import {
+  DEFAULT_ROOT, MISSHER_CATEGORY_LABELS, MISSHER_CATEGORY_FOLDERS,
+  normalizeOrganization, organizationFolders,
+  type MemoryCategory, type PluginSettings,
+} from '@mom/core';
 import type MissherMemoryPlugin from './plugin.js';
 
 export class MemorySettingTab extends PluginSettingTab {
@@ -45,10 +49,12 @@ export class MemorySettingTab extends PluginSettingTab {
           '改动需要点「应用」并重载插件才会生效。',
       );
     let rootDraft = activeRoot;
+    let refreshOrganizationPreview = (): void => {};
     rootSetting.addText(text => {
       text.setValue(activeRoot);
       text.onChange(value => {
         rootDraft = value;
+        refreshOrganizationPreview();
       });
     });
     const rootHint = containerEl.createDiv({ cls: 'mom-hint' });
@@ -77,6 +83,69 @@ export class MemorySettingTab extends PluginSettingTab {
           this.display();
         }),
     );
+
+    /* ---------------- 文件夹分类（整组显式应用） ---------------- */
+    containerEl.createEl('h3', { text: '文件夹分类与命名' });
+    containerEl.createDiv({ cls: 'mom-hint', text:
+      'Missher 分类使用记忆库、用户画像、场景、知识库、调研、决策、规划、工作流、教训、日记、周报、月报、系统、模板。' +
+      '新文件以简短主题命名；旧文件不会自动搬迁或改名。分类与确认状态、项目范围分别管理。' });
+    const organizationDraft = normalizeOrganization(this.plugin.currentSettings().organization);
+    const presetSetting = new Setting(containerEl).setName('分类方案');
+    const placementSetting = new Setting(containerEl).setName('目录位置')
+      .setDesc('“Vault 现有分类文件夹”只扫描明确绑定的目录和原记忆根，不扫描整个 Vault。可将上方记忆根设为“记忆库”存放内部状态。');
+    const folderDetails = containerEl.createEl('details');
+    folderDetails.createEl('summary', { text: '自定义分类文件夹' });
+    const folderFields = folderDetails.createDiv();
+    const organizationHint = containerEl.createDiv({ cls: 'mom-hint' });
+    const preview = (): void => {
+      try {
+        const folders = organizationFolders(rootDraft, organizationDraft);
+        organizationHint.setText(`待应用目录：${folders.join('、')}。更换根目录不会搬迁旧记忆，确认后重载才生效。`);
+      } catch (error) {
+        organizationHint.setText(`分类尚不能应用：${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    refreshOrganizationPreview = preview;
+    const renderFolderFields = (): void => {
+      folderDetails.hidden = organizationDraft.preset !== 'missher';
+      placementSetting.settingEl.hidden = organizationDraft.preset !== 'missher';
+      folderFields.empty();
+      for (const [key, label] of Object.entries(MISSHER_CATEGORY_LABELS)) {
+        const category = key as MemoryCategory;
+        new Setting(folderFields).setName(label).addText(text => {
+          text.setValue(organizationDraft.folders[category] ?? MISSHER_CATEGORY_FOLDERS[category]);
+          text.onChange(value => {
+            if (value.trim() === '') delete organizationDraft.folders[category];
+            else organizationDraft.folders[category] = value;
+            preview();
+          });
+        });
+      }
+      preview();
+    };
+    presetSetting.addDropdown(dropdown => dropdown
+      .addOption('legacy', '旧版数字分类（兼容已有设置）')
+      .addOption('missher', 'Missher 中文分类')
+      .setValue(organizationDraft.preset)
+      .onChange(value => {
+        organizationDraft.preset = value as 'legacy' | 'missher';
+        renderFolderFields();
+      }));
+    placementSetting.addDropdown(dropdown => dropdown
+      .addOption('root', '记忆根目录内')
+      .addOption('vault', 'Vault 现有分类文件夹')
+      .setValue(organizationDraft.placement)
+      .onChange(value => { organizationDraft.placement = value as 'root' | 'vault'; preview(); }));
+    renderFolderFields();
+    new Setting(containerEl).setName('应用分类方案')
+      .setDesc('将上方根目录输入和分类方案一起保存。普通旧笔记不自动导入，旧记忆不自动迁移。')
+      .addButton(button => button.setButtonText('预览并应用').onClick(async () => {
+        button.setDisabled(true);
+        try {
+          const result = await this.plugin.applyOrganization(organizationDraft, rootDraft);
+          organizationHint.setText(result.message);
+        } finally { button.setDisabled(false); }
+      }));
 
     /* ---------------- AI ---------------- */
     containerEl.createEl('h3', { text: 'AI（可选）' });

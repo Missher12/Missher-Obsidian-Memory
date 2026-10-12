@@ -53,6 +53,10 @@ function run(args, options = {}) {
   }
 }
 
+function failureDetail(result) {
+  return `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim().split('\n').slice(-8).join('\n');
+}
+
 async function main() {
   process.stdout.write('Missher Obsidian Memory —— 交付自检\n\n');
 
@@ -80,7 +84,7 @@ async function main() {
     record('插件产物没有直接使用 require("fs")', !/require\(["']fs["']\)/.test(main));
     record(
       '插件产物包含版本标识（可核对装的是哪一版）',
-      main.includes('missher-obsidian-memory') || main.includes('v0.1.1'),
+      main.includes('missher-obsidian-memory') || main.includes('v0.2.0'),
     );
   }
   if (existsSync(path.join(root, 'packages', 'core', 'dist', 'index.js'))) {
@@ -105,22 +109,25 @@ async function main() {
     record(`单元与集成测试（${summary?.[1] ?? '?'} 项）`, tests.ok, (tests.stderr || '').trim().split('\n').slice(-1)[0] ?? '');
 
     const cliE2e = run([process.execPath, path.join(root, 'scripts', 'e2e-cli.mjs')]);
-    record('CLI 端到端：排队 → 真实插件提交 → 回执可回读', cliE2e.ok, (cliE2e.stdout || '').trim().split('\n').slice(-1)[0] ?? '');
+    record('CLI 端到端：排队 → 真实插件提交 → 回执可回读', cliE2e.ok, failureDetail(cliE2e));
 
     const mcpE2e = run([process.execPath, path.join(root, 'scripts', 'e2e-mcp.mjs')]);
     const mcpSummary = /MCP 端到端：(\d+) 项通过/.exec(mcpE2e.stdout ?? '');
     record(
       `MCP 端到端：与 CLI 同契约（${mcpSummary?.[1] ?? '?'} 项）`,
       mcpE2e.ok,
-      (mcpE2e.stdout || '').trim().split('\n').slice(-1)[0] ?? '',
+      failureDetail(mcpE2e),
     );
+    const organizationE2e = run([process.execPath, path.join(root, 'scripts', 'e2e-organization.mjs')]);
+    record('中文分类端到端：真实 CLI/MCP bundle + 插件服务（合成 Vault API）', organizationE2e.ok,
+      failureDetail(organizationE2e));
   } else {
     record('单元与集成测试', true, '已按 --skip-tests 跳过（结果不代表已通过）');
   }
 
   /* ---------- 5. 交付物与校验和 ---------- */
-  const zip = path.join(root, 'dist', 'missher-obsidian-memory-0.1.1.zip');
-  const tgz = path.join(root, 'dist', 'mom-memory-cli-0.1.1.tgz');
+  const zip = path.join(root, 'dist', 'missher-obsidian-memory-0.2.0.zip');
+  const tgz = path.join(root, 'dist', 'mom-memory-cli-0.2.0.tgz');
   const sums = path.join(root, 'dist', 'SHA256SUMS.txt');
   const hasArtifacts = existsSync(zip) && existsSync(tgz) && existsSync(sums);
   if (hasArtifacts) {

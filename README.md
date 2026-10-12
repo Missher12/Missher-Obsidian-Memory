@@ -8,7 +8,7 @@
 - AI 是**可选**的：不配模型也能记、能搜、能复盘（本地确定性检查）；
 - 不依赖 MSE、DSH、OpenViking 或任何云服务才能启动和使用。
 
-需求编号 `OBS-MEM-20261009`。版本 `0.1.1`。
+需求编号 `OBS-MEM-20261009`。版本 `0.2.0`。
 
 ---
 
@@ -35,7 +35,9 @@
 
 ### 1. 装插件
 
-可直接下载私有仓库的 [0.1.1 安装包](https://github.com/Missher12/Missher-Obsidian-Memory/releases/tag/0.1.1)。从源码构建需要 Node ≥ 22.13 与 pnpm：
+本轮 0.2.0 交付目录为 `dist/`，分类说明见 [Missher 中文分类](docs/CLASSIFICATION.md)。旧版 [0.1.1 Release](https://github.com/Missher12/Missher-Obsidian-Memory/releases/tag/0.1.1) 保留；它不包含本轮分类功能。
+
+从源码构建需要 Node ≥ 22.13 与 pnpm：
 
 ```bash
 pnpm install
@@ -52,7 +54,7 @@ pnpm run package      # 额外产出 ZIP 与 SHA256SUMS.txt
     styles.css
 ```
 
-也可以直接用 `dist/missher-obsidian-memory-0.1.1.zip` 解压得到这个目录。
+也可以直接用 `dist/missher-obsidian-memory-0.2.0.zip` 解压得到这个目录。
 
 在 Obsidian 里：`设置 → 第三方插件` → 关闭「受限模式」→ 启用 **Missher Obsidian Memory**。
 
@@ -64,7 +66,7 @@ pnpm run package      # 额外产出 ZIP 与 SHA256SUMS.txt
 `pnpm run package` 会产出一个**不依赖本仓库**的独立包：
 
 ```bash
-tar -xzf dist/mom-memory-cli-0.1.1.tgz
+tar -xzf dist/mom-memory-cli-0.2.0.tgz
 node mom-memory-cli/lib/cli.js help
 ```
 
@@ -77,6 +79,10 @@ node packages/cli/dist/cli.js --vault /绝对路径/到/Vault queue-status
 ---
 
 ## 用法
+
+0.2.0 新增 14 类纯中文目录绑定、短标题与重名保护，旧版默认目录保持兼容。
+可选择专用根目录内分类，或接入 Vault 现有的分类文件夹；普通笔记不自动转成记忆。
+见 [设置步骤与分类边界](docs/CLASSIFICATION.md)、[合成示例库](examples/missher-vault/README.md) 和 [MSE 互动方向](docs/MSE-INTERACTION.md)。
 
 ### 在 Obsidian 里
 
@@ -195,7 +201,9 @@ token 计数优先用提供方响应里的真实 `usage`；提供方不报用量
 
 ---
 
-## 验收状态（2026-10-09）
+## 历史验收状态（0.1.1，2026-10-09）
+
+本表是旧版本证据，不代表 0.2.0 原生验收。当前交付见 [0.2.0 验证记录](docs/DELIVERY-0.2.0.md)。
 
 | 层 | 状态 | 证据 |
 | --- | --- | --- |

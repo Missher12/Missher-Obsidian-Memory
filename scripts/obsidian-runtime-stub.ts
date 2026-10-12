@@ -17,6 +17,7 @@
 
 import { existsSync, promises as fs, readFileSync, statSync } from 'node:fs';
 import * as nodePath from 'node:path';
+import type { OrganizationSettings } from '../packages/core/src/organization.js';
 
 export class TFile {
   path: string;
@@ -333,8 +334,9 @@ export class RuntimeVault {
 export async function buildSyntheticVault(options: {
   vaultPath: string;
   memoryRoot: string;
+  organization?: OrganizationSettings;
 }): Promise<Record<string, unknown>> {
-  const { vaultPath, memoryRoot } = options;
+  const { vaultPath, memoryRoot, organization } = options;
   const vault = new RuntimeVault(vaultPath);
   const app = { vault, secretStorage: { getSecret: () => null, setSecret: () => undefined } };
 
@@ -343,8 +345,8 @@ export async function buildSyntheticVault(options: {
   const { createCommitHandler, createCommitRecovery } = await import('../packages/plugin/src/commit-handler.js');
   const { MemoryStore } = await import('../packages/core/src/index.js');
 
-  const fileStore = new VaultFileStore({ app: app as never, memoryRoot });
-  const store = new MemoryStore({ store: fileStore, root: memoryRoot, now: () => Date.now() });
+  const fileStore = new VaultFileStore({ app: app as never, memoryRoot, organization });
+  const store = new MemoryStore({ store: fileStore, root: memoryRoot, organization, now: () => Date.now() });
   await store.load();
   store.setPatchPersist(async body => {
     try {
@@ -359,6 +361,7 @@ export async function buildSyntheticVault(options: {
     app: app as never,
     store: fileStore,
     memoryRoot,
+    organization,
     owner: 'e2e_runner',
     now: () => Date.now(),
     random: () => 0.42,

@@ -19,6 +19,12 @@
 import { createId, sha256Hex, shortHash } from './hash.js';
 import { Mutex, emptyRuntimeStats, type RuntimeStats } from './lock.js';
 import {
+  normalizeOrganization, organizationFolders, organizationCategoryFolder,
+  assertOrganizationPath, isOrganizationPath, defaultMemoryCategory,
+  type OrganizationSettings,
+} from './organization.js';
+import { MEMORY_CATEGORIES } from './types.js';
+import {
   CATEGORY_DIRS,
   DEFAULT_ROOT,
   STATE_DIR,
@@ -68,6 +74,7 @@ import {
   type TombstoneFile,
 } from './tombstone.js';
 import type {
+  MemoryCategory,
   MemoryKind,
   MemoryMeta,
   MemoryRecord,
@@ -86,6 +93,7 @@ export interface StoreOptions {
   store: FileStore;
   /** 记忆根目录（Vault 内相对路径），默认 `Second Brain`。 */
   root?: string;
+  organization?: OrganizationSettings;
   /** 时间源，便于测试注入。 */
   now?: () => number;
   /** id 随机源，便于测试注入确定性。 */
@@ -120,6 +128,7 @@ export interface MemoryDraft {
   /** 可选标题；缺省时从正文首行或正文截断推断。 */
   title?: string;
   kind?: MemoryKind;
+  category?: MemoryCategory;
   status?: MemoryStatus;
   scope?: ScopeKind;
   scopeRef?: string;
@@ -235,6 +244,7 @@ export interface SessionEvent {
 
 export class MemoryStore {
   readonly root: string;
+  readonly organization: OrganizationSettings;
   private readonly store: FileStore;
   private readonly index: MemoryIndex;
   private readonly mutex = new Mutex();
@@ -244,6 +254,10 @@ export class MemoryStore {
 
   private records = new Map<string, StoredRecord>();
   private byPath = new Map<string, string>();
+  /** 全部实际 Markdown 路径，包括普通旧笔记和损坏记录，禁止同名覆盖。 */
+  private occupiedPaths = new Set<string>();
+  /** 已识别过的托管路径；手工删坏元数据后仍须诊断，不当普通笔记忽略。 */
+  private managedPaths = new Set<string>();
   private tombstones: TombstoneSet = new TombstoneSet();
   private tombstoneFile: TombstoneFile = emptyTombstoneFile(Date.now());
   private state: StoreState = defaultState(Date.now());
@@ -297,6 +311,7 @@ export class MemoryStore {
      * 宁可构造失败，也不要带着不可信根目录继续跑。
      */
     this.root = assertSafeRoot(options.root ?? DEFAULT_ROOT);
+    this.organization = normalizeOrganization(options.organization);
     this.now = options.now ?? (() => Date.now());
     this.rand = options.rand ?? Math.random;
     this.maxScanFiles = options.maxScanFiles ?? 20_000;
@@ -816,12 +831,24 @@ export class MemoryStore {
 
     let entries: Awaited<ReturnType<FileStore['listFiles']>>;
     try {
-      entries = await this.store.listFiles(this.root, ['.md']);
+      const unique = new Map<string, Awaited<ReturnType<FileStore['listFiles']>>[number]>();
+      for (const folder of organizationFolders(this.root, this.organization)) {
+        for (const entry of await this.store.listFiles(folder, ['.md'])) {
+          // 适配器返回值也要核对；不能因一个坏枚举结果扩大读取范围。
+          if (!isOrganizationPath(this.root, this.organization, entry.path)) continue;
+          const path = normalizePath(entry.path);
+          if (!isInsideRoot(folder, path)) continue;
+          unique.set(path, { ...entry, path });
+        }
+      }
+      entries = [...unique.values()];
+      this.occupiedPaths = new Set(entries.map(entry => entry.path));
     } catch (error) {
       this.markLoadFailed(error);
       throw error;
     }
     const seen = new Set<string>();
+    this.byPath.clear();
     const problems: Array<{ path: string; issues: ParseIssue[] }> = [];
     for (const entry of entries.slice(0, this.maxScanFiles)) {
       const rel = normalizePath(entry.path);
@@ -852,6 +879,11 @@ export class MemoryStore {
       }
       if (raw === null) continue;
       report.scanned += 1;
+      if (this.organization.preset === 'missher' && !this.managedPaths.has(rel) && !looksLikeManagedMemory(raw)) {
+        // 用户原有 Markdown 与导航没有记忆身份：不纳入，也不报告为坏记忆。
+        continue;
+      }
+      this.managedPaths.add(rel);
       const parsed = parseMemoryFile(rel, raw);
       if (!parsed.record || !parsed.ok || parsed.record.meta.id === '' || !parsed.record.meta.id.startsWith('mem_')) {
         report.invalid += 1;
@@ -1133,6 +1165,10 @@ export class MemoryStore {
 
     const title = inferTitle(draft, body);
     const kind = draft.kind ?? 'note';
+    if (draft.category !== undefined && !MEMORY_CATEGORIES.includes(draft.category)) {
+      return failure('', '', '未知文件组织分类，未写入。');
+    }
+    const category = draft.category ?? (this.organization.preset === 'missher' ? defaultMemoryCategory(kind) : undefined);
     const observedAt = draft.observedAt ?? new Date(this.now()).toISOString();
     /**
      * 生成记忆 id。
@@ -1143,10 +1179,11 @@ export class MemoryStore {
      * 这里最多试 64 次，仍然撞就抛出可诊断的错误，让调用方看到原因。
      */
     const id = this.generateId();
-    const path = this.choosePath(kind, title, id);
+    const path = this.choosePath(kind, title, id, category);
     const meta: MemoryMeta = {
       id,
       kind,
+      ...(category === undefined ? {} : { category }),
       status: policy.status,
       scope: draft.scope ?? 'personal',
       scope_ref: draft.scopeRef ?? '',
@@ -1188,6 +1225,8 @@ export class MemoryStore {
     this.stats.writes += 1;
     this.records.set(id, { record, raw: text, hash: contentHashOf(text), issues: [], unsupportedYaml: [] });
     this.byPath.set(path, id);
+    this.occupiedPaths.add(path);
+    this.managedPaths.add(path);
     this.index.add(record, false);
     if (eventId) {
       /**
@@ -1401,6 +1440,7 @@ export class MemoryStore {
       const created = await this.commitLocked(
         {
           ...draft,
+          category: draft.category ?? old.record.meta.category,
           scope: draft.scope ?? old.record.meta.scope,
           scopeRef: draft.scopeRef ?? old.record.meta.scope_ref,
         },
@@ -1962,6 +2002,8 @@ export class MemoryStore {
     const hash = contentHashOf(raw);
     this.records.set(record.meta.id, { record, raw, hash, issues: [], unsupportedYaml: [] });
     this.byPath.set(record.path, record.meta.id);
+    this.occupiedPaths.add(record.path);
+    this.managedPaths.add(record.path);
     this.index.add(record, this.tombstones.has(record.meta.id));
   }
 
@@ -2004,6 +2046,7 @@ export class MemoryStore {
 
   private exclusionReasons(record: MemoryRecord): string[] {
     const reasons: string[] = [];
+    if (record.meta.category === 'template') reasons.push('模板描述记录结构，不作为事实参与召回。');
     if (this.tombstones.has(record.meta.id)) reasons.push('命中删除标记，不参与召回。');
     if (record.meta.status === 'pending') reasons.push('状态为 pending（待确认），默认不进入已确认事实查询。');
     if (record.meta.status === 'archived') reasons.push('状态为 archived（已遗忘），不参与召回但保留历史。');
@@ -2048,19 +2091,18 @@ export class MemoryStore {
   }
 
   /** 选择落盘路径：分类目录 + 稳定文件名，冲突时加序号。 */
-  private choosePath(kind: MemoryKind, title: string, id: string): string {
-    const dir = CATEGORY_DIRS[categoryOf(kind)] ?? CATEGORY_DIRS.inbox!;
-    const relativeDir = assertSafeRelativePath(dir, '分类目录');
-    const base = memoryFileName(id, title);
-    let candidate = `${relativeDir}/${base}`;
-    let index = 2;
-    while (this.byPath.has(candidate) || this.pathTaken(candidate)) {
-      candidate = `${relativeDir}/${base.replace(/\.md$/, '')}-${index}.md`;
-      index += 1;
-      if (index > 99) break;
+  private choosePath(kind: MemoryKind, title: string, id: string, category?: MemoryCategory): string {
+    const missher = this.organization.preset === 'missher';
+    const directory = missher
+      ? organizationCategoryFolder(this.root, this.organization, category ?? defaultMemoryCategory(kind))
+      : resolveInsideRoot(this.root, assertSafeRelativePath(CATEGORY_DIRS[categoryOf(kind)] ?? CATEGORY_DIRS.inbox!, '分类目录'));
+    const base = missher ? `${slugify(title).slice(0, 48) || '未命名记忆'}.md` : memoryFileName(id, title);
+    for (let index = 1; index <= 9999; index += 1) {
+      const fileName = index === 1 ? base : `${base.slice(0, -3)}-${index}.md`;
+      const candidate = assertOrganizationPath(this.root, this.organization, `${directory}/${fileName}`);
+      if (!this.occupiedPaths.has(candidate) && !this.byPath.has(candidate) && !this.pathTaken(candidate)) return candidate;
     }
-    assertNotReserved(candidate);
-    return resolveInsideRoot(this.root, candidate, '记忆路径');
+    throw new PathError('name_collision', '同名文件过多，未覆盖任何文件；请使用更具体的标题。');
   }
 
   private pathTaken(path: string): boolean {
@@ -2143,6 +2185,13 @@ function describeSource(kind: SourceKind): string {
 
 function normalizeBody(body: string): string {
   return body.replace(/\r\n/g, '\n').trim();
+}
+
+/** 保守识别明显的记忆协议字段；普通笔记的 title/tags/status/category 不构成身份。 */
+function looksLikeManagedMemory(raw: string): boolean {
+  const frontmatter = /^---\r?\n([\s\S]*?)(?:\r?\n---[ \t]*(?:\r?\n|$)|$)/.exec(raw)?.[1];
+  const header = frontmatter ?? raw.split(/\r?\n/).slice(0, 32).join('\n');
+  return /^[ \t]*(?:["']?id["']?:[ \t]*["']?mem_|["']?(?:dedupe_key|event_ids|source_kind|scope_ref|allow_model|derived_invalid)["']?:)/m.test(header);
 }
 
 function inferTitle(draft: MemoryDraft, body: string): string {

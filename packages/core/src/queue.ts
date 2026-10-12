@@ -40,8 +40,9 @@
  */
 
 import { sha256Hex } from './hash.js';
+import { assertOrganizationPath, normalizeOrganization, type OrganizationSettings } from './organization.js';
 import { assertSafeRelativePath, assertSafeRoot, normalizePath, PathError } from './paths.js';
-import { SCOPE_KINDS } from './types.js';
+import { MEMORY_CATEGORIES, SCOPE_KINDS } from './types.js';
 
 /** 请求队列目录（**相对记忆根**）。 */
 export const REQUEST_DIR = '.memory/requests';
@@ -468,7 +469,9 @@ export function validateOperationPayload(
     case 'propose':
       rejectUnknown([
         'body',
+        'title',
         'kind',
+        'category',
         'scope',
         'scope_ref',
         'scopeRef',
@@ -487,7 +490,11 @@ export function validateOperationPayload(
         'allowModel',
       ]);
       readString('body', { required: true, max: MAX_TEXT_FIELD_CHARS });
+      readString('title', { max: 300 });
+      if (payload.title === null) errors.push('payload.title 必须是字符串，不能为 null');
       readString('kind', { max: 40 });
+      readString('category', { max: 40, oneOf: MEMORY_CATEGORIES });
+      if (payload.category === null) errors.push('payload.category 必须是有效分类，不能为 null');
       readString('scope', { max: 40, oneOf: SCOPE_KINDS });
       readString('scope_ref', { max: 200 });
       readString('scopeRef', { max: 200 });
@@ -653,7 +660,13 @@ const NEEDS_EXPECTED_HASH: ReadonlySet<WriteOperation> = new Set<WriteOperation>
  * 校验请求结构。缺失、类型不对、越界或与操作不匹配一律不通过——
  * 宁可拒绝，也不猜。
  */
-export function validateRequest(request: unknown, options: { root?: string } = {}): QueueValidation {
+export interface QueueValidationOptions {
+  root?: string;
+  /** 由本地启动配置传入，永不从请求载荷读取。 */
+  organization?: OrganizationSettings;
+}
+
+export function validateRequest(request: unknown, options: QueueValidationOptions = {}): QueueValidation {
   const errors: string[] = [];
   if (request === null || typeof request !== 'object' || Array.isArray(request)) {
     return { ok: false, errors: ['请求不是对象'] };
@@ -686,7 +699,7 @@ export function validateRequest(request: unknown, options: { root?: string } = {
   if (typeof value.target !== 'string') errors.push('target 必须是字符串');
   if (target !== '' && options.root !== undefined) {
     try {
-      assertVaultRelativePath(options.root, target, 'target');
+      assertOrganizationPath(options.root, normalizeOrganization(options.organization), target, 'target');
     } catch (error) {
       errors.push(`target 不合法：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -756,7 +769,7 @@ export function validateRequest(request: unknown, options: { root?: string } = {
 }
 
 /** 校验回执结构。 */
-export function validateReceipt(receipt: unknown, options: { root?: string } = {}): QueueValidation {
+export function validateReceipt(receipt: unknown, options: QueueValidationOptions = {}): QueueValidation {
   const errors: string[] = [];
   if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) {
     return { ok: false, errors: ['回执不是对象'] };
@@ -784,7 +797,7 @@ export function validateReceipt(receipt: unknown, options: { root?: string } = {
     errors.push('path 必须是字符串或 null');
   } else if (typeof value.path === 'string' && value.path !== '' && options.root !== undefined) {
     try {
-      assertVaultRelativePath(options.root, value.path, 'path');
+      assertOrganizationPath(options.root, normalizeOrganization(options.organization), value.path, 'path');
     } catch (error) {
       errors.push(`path 不合法：${error instanceof Error ? error.message : String(error)}`);
     }

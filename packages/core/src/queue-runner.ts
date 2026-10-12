@@ -40,6 +40,7 @@ import {
   type QueueReceipt,
   type QueueRequest,
   type QueueValidation,
+  type QueueValidationOptions,
   type ReceiptEvidence,
   type ReceiptStatus,
   type WriteOperation,
@@ -93,7 +94,7 @@ export function serializeRequest(request: QueueRequest): string {
 }
 
 /** 解析请求信封；任何结构问题都进 `errors`，不猜测、不补默认值。 */
-export function parseRequestEnvelope(raw: string, options: { root?: string } = {}): ParsedEnvelope {
+export function parseRequestEnvelope(raw: string, options: QueueValidationOptions = {}): ParsedEnvelope {
   const errors: string[] = [];
   const text = raw.replace(/^\uFEFF/, '');
   if (!text.startsWith('---')) {
@@ -208,7 +209,7 @@ export function serializeReceipt(receipt: QueueReceipt): string {
 }
 
 /** 解析回执；结构不完整时返回带原因的 `null`，不猜测。 */
-export function parseReceipt(raw: string, options: { root?: string } = {}): { receipt: QueueReceipt | null; errors: string[] } {
+export function parseReceipt(raw: string, options: QueueValidationOptions = {}): { receipt: QueueReceipt | null; errors: string[] } {
   const errors: string[] = [];
   const text = raw.replace(/^\uFEFF/, '');
   if (!text.startsWith('---')) return { receipt: null, errors: ['回执缺少 YAML 头。'] };
@@ -323,7 +324,7 @@ export type ReceiptLookup =
   | { kind: 'found'; receipt: QueueReceipt }
   | { kind: 'fingerprint_mismatch'; receipt: QueueReceipt; expected: string; actual: string };
 
-export interface ProcessContext {
+export interface ProcessContext extends QueueValidationOptions {
   /** 现在（毫秒时间戳）。 */
   now: () => number;
   /** 提交者身份（写入回执，便于对账）。 */
@@ -364,11 +365,11 @@ export async function processRequest(
   request: QueueRequest,
   context: ProcessContext,
 ): Promise<ProcessResult> {
-  const root = context.root;
+  const validationOptions: QueueValidationOptions = { root: context.root, organization: context.organization };
   const requestId = typeof request.id === 'string' && request.id !== '' ? request.id : '(非法请求)';
 
   /* 1. 先校验：非法请求绝不进入幂等短路，也绝不提交。 */
-  const validation = validateRequest(request, root === undefined ? {} : { root });
+  const validation = validateRequest(request, validationOptions);
   if (!validation.ok) {
     const receipt = buildReceipt(request, context, {
       status: 'failed',
@@ -392,7 +393,7 @@ export async function processRequest(
   /* 2. 已有回执：只有指纹一致才允许复用。 */
   const lookup = context.findReceipt(request);
   if (lookup.kind === 'found') {
-    const check = validateReceipt(lookup.receipt, root === undefined ? {} : { root });
+    const check = validateReceipt(lookup.receipt, validationOptions);
     if (check.ok) {
       return { requestId, receipt: lookup.receipt, idempotent: true, recovered: false, receiptDurable: true };
     }
@@ -486,7 +487,7 @@ export async function processRequest(
       receipt,
       idempotent: false,
       recovered: true,
-      receiptDurable: await this_write(context, receipt),
+      receiptDurable: validateReceipt(receipt, validationOptions).ok && await this_write(context, receipt),
     };
   }
 
@@ -516,7 +517,7 @@ export async function processRequest(
      * 这里**不再重复**一份「缺哪个字段」的检查：那只会多一套判断而没有多一分保障，
      * 而且会让后来的人以为校验有两处、可以放宽其中一处。契约只有一处。
      */
-    const check = validateReceipt(receipt, root === undefined ? {} : { root });
+    const check = validateReceipt(receipt, validationOptions);
     if (!check.ok) {
       /**
        * 提交成功了，但回执缺少落地证据：这不能算「已完成」——

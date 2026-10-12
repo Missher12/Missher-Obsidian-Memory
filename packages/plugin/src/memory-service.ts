@@ -18,6 +18,8 @@ import {
   type ChatResult,
   type AiProvider,
   type PluginSettings,
+  normalizeOrganization,
+  type OrganizationSettings,
   type SyncReport,
 } from '@mom/core';
 import { VaultFileStore } from './vault-store.js';
@@ -43,6 +45,7 @@ export interface MemoryServiceOptions {
 }
 
 export class MemoryService {
+  readonly organization: OrganizationSettings;
   readonly vaultStore: VaultFileStore;
   readonly store: MemoryStore;
   /** AI 作业运行器：调度、预算、暂停、迟到拒绝、崩溃恢复。 */
@@ -64,14 +67,17 @@ export class MemoryService {
     this.app = options.app;
     this.instanceId = options.instanceId;
     this.getSettings = options.getSettings;
+    this.organization = normalizeOrganization(options.getSettings().organization);
     this.vaultStore = new VaultFileStore({
       app: options.app,
       memoryRoot: options.memoryRoot,
+      organization: this.organization,
       onWrite: (path, content) => options.onSelfWrite?.(path, content),
     });
     this.store = new MemoryStore({
       store: this.vaultStore,
       root: options.memoryRoot,
+      organization: this.organization,
       now: () => Date.now(),
       rand: () => Math.random(),
     });
@@ -108,6 +114,7 @@ export class MemoryService {
       app: options.app,
       store: this.vaultStore,
       memoryRoot: options.memoryRoot,
+      organization: this.organization,
       owner: options.instanceId,
       now: () => Date.now(),
       random: () => Math.random(),
