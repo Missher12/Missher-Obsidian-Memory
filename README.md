@@ -1,5 +1,7 @@
 # Missher Obsidian Memory
 
+[Missher 项目总入口](https://github.com/Missher12/Missher-DeepseekHarness-Desktop) · [全部插件目录](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/plugins/README.zh.md)
+
 一个**独立的** Obsidian 第二大脑与 AI 记忆插件：记忆是你库里的普通 Markdown，
 写不进去就不会假装写进去了。
 
