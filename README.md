@@ -10,7 +10,7 @@
 - AI 是**可选**的：不配模型也能记、能搜、能复盘（本地确定性检查）；
 - 不依赖 MSE、DSH、OpenViking 或任何云服务才能启动和使用。
 
-需求编号 `OBS-MEM-20261009`。版本 `0.2.0`。
+需求编号 `OBS-MEM-20261009`。版本 `0.2.0`。源码与产品安装包按 MIT 许可证公开；个人 Vault、笔记、凭据和学习数据仍由用户自行保管，不进入本仓库。
 
 ---
 
@@ -37,7 +37,9 @@
 
 ### 1. 装插件
 
-本轮 0.2.0 交付目录为 `dist/`，分类说明见 [Missher 中文分类](docs/CLASSIFICATION.md)。旧版 [0.1.1 Release](https://github.com/Missher12/Missher-Obsidian-Memory/releases/tag/0.1.1) 保留；它不包含本轮分类功能。
+下载[最新正式版插件 ZIP 与 CLI 包](https://github.com/Missher12/Missher-Obsidian-Memory/releases/latest)，本次 0.2.0 分类说明见 [Missher 中文分类](docs/CLASSIFICATION.md)。源码构建的交付目录为 `dist/`；旧版 0.1.1 保留，其安装包不包含中文分类功能。
+
+兼容维护以支持合理的 Obsidian 版本范围、持续适配最新版为目标。当前清单声明最低 Obsidian 1.5.0，仅用于桌面端；最低要求和测试记录分别说明，已测试版本不代表唯一可用版本。0.2.0 的离线检查与尚未完成的原生验收见[交付记录](docs/DELIVERY-0.2.0.md)。
 
 从源码构建需要 Node ≥ 22.13 与 pnpm：
 
