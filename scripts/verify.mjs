@@ -60,6 +60,11 @@ function failureDetail(result) {
 async function main() {
   process.stdout.write('Missher Obsidian Memory —— 交付自检\n\n');
 
+  // 版本单一来源：根 package.json。产物名与产物内版本标识都据此核对，
+  // 避免脚本里写死旧版本号而误验上一次的包。
+  const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
+  if (typeof version !== 'string' || version === '') throw new Error('无法从 package.json 读取 version。');
+
   /* ---------- 1. 构建：产物必须能从当前源码重建 ---------- */
   const build = run([process.execPath, path.join(root, 'scripts', 'build.mjs'), 'all']);
   record('构建成功（core / plugin / cli / mcp）', build.ok, (build.stderr || '').trim().split('\n').slice(-1)[0] ?? '');
@@ -84,7 +89,7 @@ async function main() {
     record('插件产物没有直接使用 require("fs")', !/require\(["']fs["']\)/.test(main));
     record(
       '插件产物包含版本标识（可核对装的是哪一版）',
-      main.includes('missher-obsidian-memory') || main.includes('v0.2.0'),
+      main.includes('missher-obsidian-memory') || main.includes(`v${version}`),
     );
   }
   if (existsSync(path.join(root, 'packages', 'core', 'dist', 'index.js'))) {
@@ -126,8 +131,8 @@ async function main() {
   }
 
   /* ---------- 5. 交付物与校验和 ---------- */
-  const zip = path.join(root, 'dist', 'missher-obsidian-memory-0.2.0.zip');
-  const tgz = path.join(root, 'dist', 'mom-memory-cli-0.2.0.tgz');
+  const zip = path.join(root, 'dist', `missher-obsidian-memory-${version}.zip`);
+  const tgz = path.join(root, 'dist', `mom-memory-cli-${version}.tgz`);
   const sums = path.join(root, 'dist', 'SHA256SUMS.txt');
   const hasArtifacts = existsSync(zip) && existsSync(tgz) && existsSync(sums);
   if (hasArtifacts) {

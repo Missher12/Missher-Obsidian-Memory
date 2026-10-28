@@ -190,15 +190,18 @@ export class MemorySettingTab extends PluginSettingTab {
         });
       });
 
-    const storageAvailable = this.plugin.service.hasSecretStorage();
+    const canPersist = this.plugin.service.canPersistCredential();
+    const canReadPersisted = this.plugin.service.canReadPersistedCredential();
     new Setting(containerEl)
       .setName('API Key')
       .setDesc(
-        storageAvailable
+        canPersist
           ? '保存在 Obsidian 的密钥存储里，不会写入本插件的数据文件或 Markdown。' +
             '如实说明：本插件不验证底层是否使用系统钥匙串，也不声称所有平台都加密；' +
             'Obsidian 目前没有公开的密钥删除 API，留空保存只会覆盖为空值。'
-          : '当前 Obsidian 版本没有可用的密钥存储 API（需要 1.11.4+），因此不会保存密钥。',
+          : canReadPersisted
+            ? '当前 Host 只提供密钥**读取**接口，没有可用的写入接口，因此这里填的密钥只能保留在本次运行内。'
+            : '当前 Obsidian 版本没有可用的密钥存储 API（需要 1.11.4+），因此不会保存密钥。',
       )
       .addText(text => {
         text.inputEl.type = 'password';
@@ -215,10 +218,16 @@ export class MemorySettingTab extends PluginSettingTab {
           }
           const settings = this.plugin.currentSettings();
           const ok = this.plugin.service.writeCredential(value.trim(), settings);
+          /**
+           * 三种结局分别措辞，不把「无法确认」说成「没有落盘」：
+           * setSecret 可能已经写入成功，只是读不回来，此时不能承诺任何一边。
+           */
           this.plugin.service.notify(
             ok
               ? '密钥已写入 Obsidian 密钥存储（本插件不验证底层是否使用系统钥匙串，也不声称所有平台都加密）。'
-              : '密钥已生效，但**只保留在本次运行内**（关闭 Obsidian 即失效，不会写入任何文件）。',
+              : this.plugin.service.persistUnconfirmedLastWrite()
+                ? '本次运行的覆盖值已生效；持久保存未确认，关闭后请重新核对。'
+                : '密钥只保留在本次运行内生效（关闭 Obsidian 即失效，不会写入本插件的任何文件）。',
           );
           if (input) input.value = '';
           this.display();
@@ -229,17 +238,20 @@ export class MemorySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('密钥当前状态')
       .setDesc(
-        runtime.keyConfigured()
-          ? '已配置：界面只显示「有 / 没有」，不会回显密钥内容。'
-          : runtime.hasSessionKey()
-            ? '配置了本次运行的临时密钥。'
+        runtime.hasSessionKey()
+          ? '使用本次运行的覆盖值（关闭 Obsidian 即失效）；它优先于已持久化的密钥。'
+          : runtime.keyConfigured()
+            ? '已配置：界面只显示「有 / 没有」，不会回显密钥内容。'
             : '尚未配置密钥；模型接口通常需要它。',
       )
       .addButton(button => {
         button.setButtonText('清除本次运行的临时密钥');
         button.onClick(() => {
-          runtime.writeSessionKey('');
-          this.plugin.service.notify('已清除本次运行的临时密钥（已写入密钥存储的那一份不会被删除：公开 API 没有 removeSecret）。');
+          // 清除 = 撤掉覆盖；若写成空串覆盖，已持久化的密钥会被永久挡住。
+          runtime.clearSessionOverride();
+          this.plugin.service.notify(
+            '已清除本次运行的临时密钥；已写入密钥存储的那一份仍然有效（公开 API 没有 removeSecret，本插件不会假装删掉它）。',
+          );
           this.display();
         });
       });
@@ -391,6 +403,7 @@ export class MemorySettingTab extends PluginSettingTab {
     const status = containerEl.createDiv({ cls: 'mom-hint' });
     const settings: PluginSettings = this.plugin.currentSettings();
     const refresh = this.plugin.indexRefreshStats();
+    const capabilities = this.plugin.capabilities();
     status.setText(
       [
         `记忆根目录（当前生效）：${this.plugin.service.memoryRoot}`,
@@ -402,7 +415,12 @@ export class MemorySettingTab extends PluginSettingTab {
         }`,
         `状态目录：${settings.stateDir}（请求队列 ${settings.stateDir}/requests，回执 ${settings.stateDir}/receipts）`,
         `AI：${settings.ai.enabled ? '已启用' : '未启用'}`,
-        `密钥存储 API：${storageAvailable ? '可用（不验证是否使用系统钥匙串）' : '不可用'}`,
+        `密钥持久化：${capabilities.optional.secretStorageWrite && capabilities.optional.secretStorageRead ? '读+写可用（不验证是否使用系统钥匙串）' : capabilities.optional.secretStorageWrite ? '只有写入接口：无法读回，凭据会丢' : capabilities.optional.secretStorageRead ? '只读可用：新密钥只保留在本次运行内' : '不可用'}`,
+        /** 能力一览：只列事实，必要接口缺失时核心提交会抛错。 */
+        `安全提交（Vault.process）：${capabilities.required.vaultProcess ? '可用' : '缺失——不会写入正文'}`,
+        ...(capabilities.missingOptional.length === 0
+          ? []
+          : [`已停用的可选功能：${capabilities.missingOptional.join('、')}`]),
       ].join('\n'),
     );
   }

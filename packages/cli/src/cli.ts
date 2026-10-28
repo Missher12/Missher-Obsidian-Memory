@@ -41,6 +41,17 @@ import { NodeFileStore } from './node-store.js';
 import { ExternalQueueClient, RECEIPT_LABELS } from './external-queue.js';
 import { categoryFrom, organizationFromStartup } from './organization-options.js';
 
+/**
+ * 版本身份。
+ *
+ * `__MOM_VERSION__` 由 `scripts/build.mjs` 从根 `package.json` 注入（esbuild `define`），
+ * 与 `mcp.ts` 用同一套接线。下面的 `declare` + 兜底值让 TypeScript 能过，
+ * 并保证「直接跑源码、没走构建」时得到 `0.0.0-unbuilt` 这个明显是占位的版本，
+ * 而不是一个看起来像真的版本号。
+ */
+declare const __MOM_VERSION__: string | undefined;
+const VERSION = typeof __MOM_VERSION__ === 'string' ? __MOM_VERSION__ : '0.0.0-unbuilt';
+
 interface ParsedArgs {
   command: string;
   flags: Map<string, string>;
@@ -248,7 +259,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (args.command === 'version') {
-    process.stdout.write('mom-memory 0.2.0\n');
+    process.stdout.write(`mom-memory ${VERSION}\n`);
     return 0;
   }
   if (!(COMMANDS as readonly string[]).includes(args.command)) {
@@ -1321,7 +1332,7 @@ function fail(message: string): void {
 }
 
 function printHelp(): void {
-  process.stdout.write(`mom-memory 0.2.0 —— Missher Obsidian Memory 的独立命令行入口
+  process.stdout.write(`mom-memory ${VERSION} —— Missher Obsidian Memory 的独立命令行入口
 
 用法：
   mom-memory <命令> --vault <Vault绝对路径> [选项]

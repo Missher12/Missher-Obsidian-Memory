@@ -41,7 +41,16 @@ import { ExternalQueueClient, RECEIPT_LABELS } from './external-queue.js';
 import { categoryFrom, organizationFromStartup } from './organization-options.js';
 
 const NAME = 'missher-obsidian-memory';
-const VERSION = '0.2.0';
+/**
+ * 版本身份。
+ *
+ * `__MOM_VERSION__` 由 `scripts/build.mjs` 从根 `package.json` 注入
+ * （esbuild `define`）；下面的声明既让 TypeScript 通过，也让
+ * 「忘了用构建脚本、直接跑源码」时退到一个明确标记的占位值，
+ * 而不是悄悄报出一个看似真实的版本号。
+ */
+declare const __MOM_VERSION__: string | undefined;
+const VERSION = typeof __MOM_VERSION__ === 'string' ? __MOM_VERSION__ : '0.0.0-unbuilt';
 const PROTOCOL_VERSION = '2024-11-05';
 
 /* ------------------------------------------------------------------ */

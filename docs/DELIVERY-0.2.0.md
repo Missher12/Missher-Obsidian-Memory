@@ -1,6 +1,6 @@
 # 0.2.0 中文分类交付
 
-实现日期：2026-10-12。2026-10-13 用户授权公开源码及产物，采用正式 Release；产品继续独立运行，不依赖 DSH 或 MSE。
+日期：2026-10-12。独立 Obsidian Memory 继续保留私有仓库，不依赖 DSH 或 MSE。
 
 ## 最终行为
 
@@ -40,8 +40,8 @@ MSE 维护任务独立完成 12 项实际核心的合成契约断言；这些是
 
 升级前备份插件设置、托管 Markdown 和原根 `.memory`。旧版不能完整理解同级分类目录；回退应恢复成对的插件/设置，保留新建笔记，不用旧状态覆盖新操作。本轮没有自动迁移或需要回滚的个人库修改。
 
-## Git 与发布
+## Git 交付状态
 
-源码已同步到公开仓库，安装包见 [0.2.0 正式 Release](https://github.com/Missher12/Missher-Obsidian-Memory/releases/tag/0.2.0)。Git 写权限已恢复；开发时的 HTTP 403 不再是当前交付状态。发布复用上述已验收包，保留原始版本、摘要和未完成的原生验收说明；公开源码不包含个人 Vault、凭据或学习数据库。
+实现提交 `a7749eb02e0cc298619286c611c861d4fe28ef3e` 已保存在本地 main。向原私有仓库 main 推送返回 HTTP 403（Write access to repository not granted）；SSH 回退返回 Permission denied (publickey)，已连接 GitHub 的仓库查询返回 404。远端仍为 `7189a2224134e44650d9e8fb4f64f1d7d74333ec`，不能称已推送或已发布 0.2.0 Release。
 
-此版正式发布不代表已经安装到当前电脑的 Obsidian。需要在自己的 Vault 备份后按 README 手动安装，或单独安排安装验收。
+需要恢复本机对原仓库的写权限后执行 `git push origin main`，再核对远端与 HEAD。代码、测试、包和文档均已完成；本地另有 `dist/missher-obsidian-memory-0.2.0-source.bundle` 保存 Git 历史，便于转移到有写权限的电脑。

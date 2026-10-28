@@ -153,6 +153,9 @@ async function queueFiles(vault) {
 }
 
 async function main() {
+  // 版本单一来源：根 package.json。避免写死旧版本而误验上一次构建的 bundle。
+  const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
+  if (typeof version !== 'string' || version === '') throw new Error('无法从 package.json 读取 version。');
   for (const bundle of [cli, server]) {
     if (!existsSync(bundle)) throw new Error(`缺少 ${path.relative(root, bundle)}；请先统一构建当前 CLI/MCP bundle。`);
     const sha = createHash('sha256').update(await readFile(bundle)).digest('hex');
@@ -176,7 +179,7 @@ async function main() {
     const commit = () => buildSyntheticVault({ vaultPath: vault, memoryRoot, organization });
     session = startMcp(vault);
     const initialized = await session.request('initialize', { protocolVersion: '2024-11-05', capabilities: {} });
-    check('真实 MCP bundle 版本为 0.2.0', initialized.result?.serverInfo?.version === '0.2.0');
+    check(`真实 MCP bundle 版本为 ${version}`, initialized.result?.serverInfo?.version === version);
     const listed = await session.request('tools/list');
     const rememberSchema = listed.result?.tools?.find(item => item.name === 'memory_remember')?.inputSchema;
     check('MCP schema 声明分类与短标题长度', rememberSchema?.properties?.category?.enum?.includes('profile')

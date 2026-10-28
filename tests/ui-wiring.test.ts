@@ -137,7 +137,7 @@ describe('U1 MemoryService 的 provider 走核心边界（不是另写一套）'
   it('密钥存储选择真的影响行为：persistKey=false 时不读密钥存储，临时密钥仍可用', async () => {
     const vault = new FakeVault();
     const app = createFakeApp(vault);
-    app.secretStorage.setSecret(SECRET_ID, 'persisted-key');
+    app.persistedSecrets.set(SECRET_ID, 'persisted-key');
     const settings = settingsWith({ enabled: true, baseUrl: 'https://example.invalid/v1', model: 'm', persistKey: false });
     const service = new MemoryService({
       app: app as never,

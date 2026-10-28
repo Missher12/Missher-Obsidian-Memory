@@ -12,7 +12,7 @@
  * - 不在缺少模型配置时假装 AI 可用。
  */
 
-import { Notice, Plugin, TFile, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
+import { Notice, Plugin, TFile, type App, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
 import {
   DEFAULT_ROOT,
   assertSafeRoot,
@@ -40,6 +40,11 @@ export interface SendScopeReport {
   defaultScope: ScopeFilter;
 }
 import { MemoryService } from './memory-service.js';
+import {
+  describeCapabilities,
+  probeCapabilities,
+  type CapabilityReport,
+} from './capabilities.js';
 import { IndexRefreshMonitor } from './index-refresh.js';
 import { WorkbenchView, VIEW_TYPE_WORKBENCH, activateWorkbench } from './view-workbench.js';
 import { QuickCaptureModal, RecordDetailModal, SearchModal, SuggestionModal } from './modals.js';
@@ -116,8 +121,26 @@ export default class MissherMemoryPlugin extends Plugin {
   } | null = null;
   /** 索引跟随刷新：有界合并、跳过自触发、不与提交抢（逻辑在 index-refresh.ts）。 */
   private indexMonitor!: IndexRefreshMonitor;
+  /**
+   * 宿主能力探测结果（构造后立即探测一次）。
+   *
+   * 用途是**如实报告**缺少什么：必要接口缺失时核心提交会抛错，
+   * 可选接口缺失时只关闭对应功能。这里不替代 `VaultFileStore` 内的闸门，
+   * 只是在界面上把原因说出来。
+   */
+  private capabilityReport!: CapabilityReport;
 
   override async onload(): Promise<void> {
+    /**
+     * 能力探测放在最前面：后面的每一步都依赖「宿主到底提供了什么」这个事实。
+     * `probeCapabilities` 只看接口是否真实存在，不猜版本号。
+     */
+    this.capabilityReport = probeCapabilities(this.app as unknown as App);
+    const capabilityNote = describeCapabilities(this.capabilityReport);
+    if (capabilityNote !== null) {
+      new Notice(`Missher Obsidian Memory：${capabilityNote}`, 12_000);
+    }
+
     const merged = mergeSettings(await this.loadData());
     this.momSettings = merged.settings;
     this.settingsWarnings = merged.warnings;
@@ -483,6 +506,11 @@ ${record.body}`;
     return this.settingsWarnings;
   }
 
+  /** 宿主能力探测结果；设置页与工作台按它如实展示缺失项。 */
+  capabilities(): CapabilityReport {
+    return this.capabilityReport;
+  }
+
   /**
    * 保存设置并**真的应用**需要立即生效的部分。
    *
@@ -575,15 +603,13 @@ ${record.body}`;
       return { ok: false, message: `记忆根目录未保存：${error instanceof Error ? error.message : String(error)}`, reloading: false };
     }
     this.momSettings = updated;
-    const reload = (this.app as unknown as { commands?: { executeCommandById?: (id: string) => boolean } }).commands
-      ?.executeCommandById;
-    if (typeof reload === 'function' && reload.call((this.app as unknown as { commands: unknown }).commands, 'app:reload') === true) {
+    // 重载失败（缺失 / false / 抛错）都只影响「自动生效」这一步，不影响已保存的事实。
+    if (await this.tryReloadApp()) {
       return { ok: true, message: `正在重载插件以使用「${safe}」…`, reloading: true };
     }
-    // 拿不到重载命令时如实说：设置已保存，但要用户自己重启 Obsidian。
     return {
       ok: true,
-      message: `设置已保存为「${safe}」，但无法自动重载插件：请手动用「重新加载应用」或重启 Obsidian 使其生效。`,
+      message: `设置已保存为「${safe}」，但无法自动重载插件：当前运行仍使用原根「${active}」；请手动用「重新加载应用」或重启 Obsidian 使其生效。`,
       reloading: false,
     };
   }
@@ -598,6 +624,25 @@ ${record.body}`;
       dailyHours: settings.review.triggers.dailyHours,
       weeklyHours: settings.review.triggers.weeklyHours,
     });
+  }
+
+  /**
+   * 尝试重载应用；返回 `true` 仅当 `app:reload` 确实被接受。
+   *
+   * 命令缺失、返回 `false` 或抛错都算失败。这里只隔离重载这一步：
+   * 它在 `saveData` 之后，异常放出去会让调用方把「已保存」误报成「保存失败」。
+   */
+  private async tryReloadApp(): Promise<boolean> {
+    const commands = (this.app as unknown as { commands?: unknown } | undefined)?.commands;
+    if (commands === null || typeof commands !== 'object') return false;
+    const reload = (commands as { executeCommandById?: unknown }).executeCommandById;
+    if (typeof reload !== 'function') return false;
+    try {
+      // await 兼容同步返回布尔值的真实宿主与返回 Promise 的实现。
+      return (await (reload as (id: string) => unknown).call(commands, 'app:reload')) === true;
+    } catch {
+      return false;
+    }
   }
 
   /** 分类和根一起保存；运行中的服务保持冻结，重载后才切换，不搬迁旧文件。 */
@@ -630,11 +675,11 @@ ${record.body}`;
       return { ok: false, message: `分类设置未保存：${error instanceof Error ? error.message : String(error)}` };
     }
     this.momSettings = updated;
-    const commands = (this.app as unknown as { commands?: { executeCommandById?: (id: string) => boolean } }).commands;
-    if (commands?.executeCommandById?.('app:reload') === true) {
+    // 与 applyRoot 同一语义：重载失败不等于保存失败，也不等于分类没变。
+    if (await this.tryReloadApp()) {
       return { ok: true, message: '分类设置已保存，正在重载应用。' };
     }
-    return { ok: true, message: '分类设置已保存，当前仍使用旧方案；请重新加载应用后使用新分类。' };
+    return { ok: true, message: `分类设置已保存，但无法自动重载应用：当前仍使用旧方案；请手动重新加载应用后使用新分类。` };
   }
 
   /** 重绘所有工作台视图。 */

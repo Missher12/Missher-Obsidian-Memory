@@ -32,10 +32,12 @@
 import { TFile, TFolder, type App, type DataAdapter } from 'obsidian';
 import {
   PathError,
+  STATE_DIR,
   assertVaultRelativePath,
   assertOrganizationPath,
   normalizeOrganization,
   isInsideRoot,
+  isStatePath,
   type OrganizationSettings,
   compareDeleteExpectation,
   compareExpectation,
@@ -48,6 +50,12 @@ import {
   type WriteExpectation,
   type WriteResult,
 } from '@mom/core';
+import {
+  NO_ATOMIC_WRITE,
+  UNSAFE_OFFINDEX_WRITE,
+  atomicWriteUnavailableMessage,
+  offIndexWriteUnavailableMessage,
+} from './capabilities.js';
 
 export interface VaultFileStoreOptions {
   app: App;
@@ -111,10 +119,20 @@ export class VaultFileStore implements FileStore {
 
   /** 校验一个来自核心的路径；不合法直接抛，绝不静默改成别的路径。 */
   private safe(path: string, label = '路径'): string {
-    if (this.organization.preset === 'legacy' || isInsideRoot(`${this.root}/.memory`, path)) {
+    if (this.organization.preset === 'legacy' || isInsideRoot(`${this.root}/${STATE_DIR}`, path)) {
       return assertVaultRelativePath(this.root, path, label);
     }
     return assertOrganizationPath(this.root, this.organization, path, label);
+  }
+
+  /**
+   * 这个路径是否属于**插件自己的状态域**（`<记忆根>/.memory`）。
+   *
+   * 状态域里的文件由本插件读写，不承载用户的权威正文，因此适配器直写
+   * 是可接受的；域外则是权威 Markdown，必须走原子契约。
+   */
+  private isOwnStateFile(absolute: string): boolean {
+    return isStatePath(this.root, absolute);
   }
 
   /**
@@ -295,16 +313,37 @@ export class VaultFileStore implements FileStore {
    * 「读当前内容 → 与期望值比较 → 决定写入」这一串不会被打断。
    * 人工编辑要么在读之前已经落盘（于是比较失败），要么在写之后落盘
    * （于是用户看到的是自己的版本，插件会在下一次比较时发现差异）。
+   *
+   * ## 缺少 `Vault.process` 时**拒绝写入**（不放宽成 `modify`）
+   *
+   * 修复前，这里在拿不到 `process` 时退到 `vault.modify`，并把「非原子」
+   * 记进返回值，理由是「语义仍是比较后写入」。这个理由站不住：
+   * `modify` 的「读原文」与真正落盘之间隔着一个完整的事件循环窗口，
+   * 用户在这期间的手动编辑会被静默覆盖——恰好是本插件第一位承诺
+   * （不覆盖人工编辑）所禁止的。因此这里在**任何写路径之前**先卡一次能力闸门，
+   * 缺失就抛 `no_atomic_write`，让上层如实报错。
+   *
+   * 闸门放在最前面而不是只包住 `process` 分支：「文件在磁盘上但不在索引里」
+   * 那条 `adapter.read` → `adapter.write` 的路径有同样的窗口，不能只在其中一条上守。
    */
   async writeFile(relative: string, content: string, expect: WriteExpectation = {}): Promise<WriteResult> {
+    if (typeof this.app.vault.process !== 'function') {
+      throw new PathError(NO_ATOMIC_WRITE, atomicWriteUnavailableMessage(`写入 ${relative}`));
+    }
     const absolute = this.safe(relative);
     let existing = this.app.vault.getAbstractFileByPath(absolute);
 
     if (existing === null && (await this.adapterExists(absolute))) {
       /**
-       * 文件在磁盘上存在但不在索引里（隐藏目录/外部刚写入）。
-       * 按「已存在」处理，绝不当作新建去覆盖它。
+       * 磁盘上存在但不在索引里，必须分两类：
+       * - 插件自己的状态域（`<记忆根>/.memory`）：由插件读写，适配器直写继续可用；
+       * - 状态域之外的权威 Markdown：`vault.process` 只接受索引里的 `TFile`，
+       *   这条路径拿不到原子「读—比较—写」，下面 read 与 write 之间的 await
+       *   会让外部写入被静默覆盖。再读一次或加进程内锁都不构成原子契约，故拒绝。
        */
+      if (!this.isOwnStateFile(absolute)) {
+        throw new PathError(UNSAFE_OFFINDEX_WRITE, offIndexWriteUnavailableMessage(`写入 ${relative}`));
+      }
       const raw = await this.adapter.read(absolute).catch(() => null);
       if (raw === null) {
         throw new PathError('read_failed', `文件存在于磁盘但读不出来：${relative}`);
@@ -354,28 +393,17 @@ export class VaultFileStore implements FileStore {
     let conflictReason: string | null = null;
     let conflictHash = '';
     let wrote = false;
-    if (typeof this.app.vault.process === 'function') {
-      await this.app.vault.process(existing, data => {
-        const verdict = compareExpectation(expect, contentHashOf(data), data, contentHashOf);
-        if (verdict) {
-          conflictReason = verdict;
-          conflictHash = contentHashOf(data);
-          // 同步回调里返回原文 = 不写入，人工编辑原样保留。
-          return data;
-        }
-        wrote = true;
-        return content;
-      });
-    } else {
-      /**
-       * 没有 `vault.process`（很旧的宿主）时退到 modify：
-       * 语义仍是「比较后写入」，但中间多了一个 await 窗口。
-       * 这里如实记在返回值里（`previousHash` 用比较时读到的那一版），
-       * 不假装它和 process 一样原子。
-       */
-      await this.app.vault.modify(existing, content);
+    await this.app.vault.process(existing, data => {
+      const verdict = compareExpectation(expect, contentHashOf(data), data, contentHashOf);
+      if (verdict) {
+        conflictReason = verdict;
+        conflictHash = contentHashOf(data);
+        // 同步回调里返回原文 = 不写入，人工编辑原样保留。
+        return data;
+      }
       wrote = true;
-    }
+      return content;
+    });
 
     if (conflictReason !== null) {
       return { status: 'conflict', path: relative, actualHash: conflictHash, reason: conflictReason };

@@ -23,6 +23,7 @@ import {
   type SyncReport,
 } from '@mom/core';
 import { VaultFileStore } from './vault-store.js';
+import { probeCapabilities, type CapabilityReport } from './capabilities.js';
 import { QueueService } from './queue-service.js';
 import { createCommitHandler, createCommitRecovery } from './commit-handler.js';
 import { AiJobRunner } from './job-runner.js';
@@ -56,12 +57,22 @@ export class MemoryService {
   private readonly getSettings: () => PluginSettings;
   private loaded = false;
   /**
-   * 只保留在本次运行内的密钥（`keyStorage: 'session'`，或平台没有密钥存储时）。
+   * 本次运行的密钥覆盖。
    *
-   * 它**不会**写进插件 `data.json`，关闭 Obsidian 即丢失；
-   * 但 AI 功能因此仍然可用，而不是「没法配置所以整个功能消失」。
+   * `undefined` = 没有覆盖（读取走持久存储）；`''` = 显式清空，必须压住旧持久值；
+   * 其他 = 临时密钥。用 `undefined` 而非 `''` 表示「没有」，因为「显式空」与
+   * 「没设置」是两件事：混同会让清空后旧的持久密钥复活。
    */
-  private sessionKey = '';
+  private sessionOverride: string | undefined = undefined;
+  /**
+   * 上一次写入是否**可能**已经落进持久存储但无法确认。
+   *
+   * 覆盖「setter 已调用但没确认读回」的全部情形（读回不一致、读回抛错、
+   * setter 抛错——setter 可能先落盘再抛）。只用于让界面措辞准确：
+   * 这条路径上既不能承诺「已保存」，也不能承诺「没落盘」。
+   * 未尝试持久化时才为 `false`。
+   */
+  private persistUnconfirmed = false;
 
   constructor(options: MemoryServiceOptions) {
     this.app = options.app;
@@ -328,39 +339,39 @@ export class MemoryService {
 
   /**
    * 写入本次运行的临时密钥（不落盘）。
-   * 平台没有密钥存储、或用户选择「只本次运行」时走这条路。
+   *
+   * 空串是**有效**的显式覆盖：表示「此刻没有密钥」，而不是「没有覆盖」。
    */
   writeSessionKey(value: string): void {
-    this.sessionKey = value.trim();
+    this.sessionOverride = value.trim();
   }
 
-  /** 是否持有本次运行的临时密钥。 */
+  /** 是否存在本次运行的覆盖（含显式空覆盖）。 */
   hasSessionKey(): boolean {
-    return this.sessionKey !== '';
+    return this.sessionOverride !== undefined;
+  }
+
+  /** 清除本次运行的覆盖，让读取重新走持久存储。 */
+  clearSessionOverride(): void {
+    this.sessionOverride = undefined;
   }
 
   /**
-   * 读取 API Key。
+   * 读取 API Key：本次运行的覆盖优先，其次持久存储。
    *
-   * 首选 Obsidian 的 `SecretStorage`（1.11.4+），由应用管理，不落进插件数据。
-   * **如实声明**：本插件不验证底层是否使用系统钥匙串，也不声称所有平台都加密；
+   * 覆盖存在时直接返回（哪怕是空串），绝不回落到旧持久值——清空必须立即生效。
+   * **如实声明**：不验证底层是否使用系统钥匙串，也不声称所有平台都加密；
    * 只声称「没有把密钥写进插件 data.json 或 Markdown」。
-   * 另外 `SecretStorage` 的公开 API **没有** removeSecret（1.13.x 实测），
-   * 因此“清空密钥”只能写入空串。
+   * `SecretStorage` 无 removeSecret（1.13.x 实测），清空持久密钥只能写入空串。
    */
   readCredential(settings: PluginSettings): string {
-    /**
-     * 顺序上先看本次运行的临时密钥：用户刚在界面上填的那一个应当立即生效，
-     * 不必先写进任何持久位置。
-     */
-    if (this.sessionKey !== '') return this.sessionKey;
+    if (this.sessionOverride !== undefined) return this.sessionOverride;
     if (!settings.ai.persistKey) return '';
     if (settings.ai.keyStorage !== 'secret-storage') return '';
-    const id = SECRET_ID;
-    const secretStorage = this.secretStorage();
-    if (secretStorage) {
+    const storage = this.secretStorage();
+    if (storage !== null && typeof storage.getSecret === 'function') {
       try {
-        const value = secretStorage.getSecret(id);
+        const value = storage.getSecret(SECRET_ID);
         if (typeof value === 'string' && value !== '') return value;
       } catch {
         /* 读取失败按“没有配置”处理，界面上会提示去设置里填 */
@@ -372,40 +383,115 @@ export class MemoryService {
   /**
    * 写入密钥。
    *
-   * `persistKey: false`（或平台没有 SecretStorage）时落到**本次运行的临时密钥**，
-   * 返回 false 表示「没有持久保存」，但 AI 功能立刻可用——
-   * 设置里的开关因此真的影响行为，而不是摆设。
+   * 返回 `true` 仅当密钥**真的能再次读回**：只有 setter 而没有 getter 的宿主
+   * 上，写进去的值本次运行内读不回来，等于凭据丢失，不能报成已持久化。
+   * 其他情况落到本次运行的覆盖并返回 `false`。
+   *
+   * 失败分两类，界面据此措辞：
+   * - **尝试过 setter 但未确认读回**（读回不一致、读回抛错、setter 抛错）→ 置
+   *   `persistUnconfirmed`：setter 可能已经落盘再失败，不能承诺「没写入」；
+   * - **没有尝试持久化**（未启用持久化、无存储、能力不足）→ 确定没落盘。
+   *
+   * 空串是**有效**写入：表示「此刻清空」，必须压住旧持久值，而不是「什么都不做」。
    */
   writeCredential(value: string, settings: PluginSettings): boolean {
-    const settingsSnapshot = settings;
-    if (!settingsSnapshot.ai.persistKey || settingsSnapshot.ai.keyStorage !== 'secret-storage') {
-      this.writeSessionKey(value);
-      return false;
+    const trimmed = value.trim();
+    const wantsPersist = settings.ai.persistKey && settings.ai.keyStorage === 'secret-storage';
+    const storage = wantsPersist ? this.secretStorage() : null;
+    if (storage !== null && typeof storage.setSecret === 'function' && this.canPersistCredential()) {
+      const setSecret = storage.setSecret;
+      try {
+        setSecret.call(storage, SECRET_ID, trimmed);
+        // 写后读回验证：只有验得回来才清掉覆盖，否则凭据可能已经丢了。
+        const readBack = this.readPersistedSecret();
+        if (readBack !== trimmed) {
+          // setSecret 已调用：持久值可能已被改写，只是无法确认。
+          this.persistUnconfirmed = true;
+          this.writeSessionKey(trimmed);
+          return false;
+        }
+        this.persistUnconfirmed = false;
+        this.sessionOverride = undefined;
+        return true;
+      } catch {
+        /**
+         * `setSecret` 抛错**不等于**写入没有发生：setter 可能先落盘再抛。
+         * 只要 setter 已被调用就无法确认读回，因此与读回失败同一处理。
+         */
+        this.persistUnconfirmed = true;
+        this.writeSessionKey(trimmed);
+        return false;
+      }
     }
-    const secretStorage = this.secretStorage();
-    if (!secretStorage) {
-      this.writeSessionKey(value);
-      return false;
-    }
-    try {
-      secretStorage.setSecret(SECRET_ID, value);
-      this.sessionKey = '';
-      return true;
-    } catch {
-      return false;
-    }
+    // 没有尝试持久化（未启用、无存储、或能力不足）才确定「没落盘」。
+    this.persistUnconfirmed = false;
+    this.writeSessionKey(trimmed);
+    return false;
   }
 
-  /** 当前是否具备密钥存储能力（用于设置页文案，不用于假装已加密）。 */
+  /** 上一次写入是否可能已落盘但无法确认（仅用于界面措辞，不改变行为）。 */
+  persistUnconfirmedLastWrite(): boolean {
+    return this.persistUnconfirmed;
+  }
+
+  /**
+   * 是否具备**完整**的密钥持久化能力（读 + 写）。
+   *
+   * 不是「对象存在」：只有 getter 或只有 setter 都算不上可用的持久化。
+   */
   hasSecretStorage(): boolean {
-    return this.secretStorage() !== null;
+    return this.canPersistCredential();
   }
 
-  private secretStorage(): { getSecret(id: string): string | null; setSecret(id: string, value: string): void } | null {
+  /**
+   * 与 `capabilities.ts` 同一判据的能力报告。
+   *
+   * 直接复用探测函数，避免设置页与实际行为两套判断不一致。
+   */
+  capabilities(): CapabilityReport {
+    return probeCapabilities(this.app);
+  }
+
+  /**
+   * 能否持久化密钥：必须同时具备 setSecret 与 getSecret。
+   *
+   * 只有 setter 时写进去的值读不回来；这种宿主上一律走本次运行的覆盖。
+   */
+  canPersistCredential(): boolean {
+    const optional = this.capabilities().optional;
+    return optional.secretStorageWrite && optional.secretStorageRead;
+  }
+
+  /** 能否读回已持久化的密钥（只探测 getter）。 */
+  canReadPersistedCredential(): boolean {
+    return this.capabilities().optional.secretStorageRead;
+  }
+
+  /** 读一次持久存储；不可用或读取失败都返回 `null`。 */
+  private readPersistedSecret(): string | null {
+    const storage = this.secretStorage();
+    if (storage === null || typeof storage.getSecret !== 'function') return null;
+    try {
+      const value = storage.getSecret.call(storage, SECRET_ID);
+      return typeof value === 'string' ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private secretStorage(): {
+    getSecret?: (id: string) => string | null;
+    setSecret?: (id: string, value: string) => void;
+  } | null {
     const storage = (this.app as unknown as {
-      secretStorage?: { getSecret(id: string): string | null; setSecret(id: string, value: string): void };
+      secretStorage?: {
+        getSecret?: (id: string) => string | null;
+        setSecret?: (id: string, value: string) => void;
+      };
     }).secretStorage;
-    return storage && typeof storage.getSecret === 'function' ? storage : null;
+    // 只要求「是对象」：getter / setter 各自是否可用由调用点单独判定。
+    if (storage === null || typeof storage !== 'object') return null;
+    return storage;
   }
 
   notify(message: string): void {

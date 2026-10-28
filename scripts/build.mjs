@@ -24,7 +24,18 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = (process.argv[2] ?? 'all').toLowerCase();
-const VERSION = '0.2.0';
+
+/**
+ * 版本只从 `package.json` 读，**不再在脚本里写第二份**。
+ *
+ * 之前这里硬编码 `'0.2.0'`，verify / e2e 脚本各自又写了一份，升版本要改五处，
+ * 漏一处就会产出「manifest 一个版本、包名另一个版本」的东西。单一来源消灭漂移。
+ */
+const VERSION = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
+if (typeof VERSION !== 'string' || VERSION === '') {
+  throw new Error('无法从 package.json 读取 version。');
+}
+
 const PLUGIN_ID = 'missher-obsidian-memory';
 
 const banner = (name) =>
@@ -145,6 +156,8 @@ async function buildCli() {
     format: 'esm',
     platform: 'node',
     target: 'node20',
+    // 版本由构建注入：源码里不再写第二份字面量。
+    define: { __MOM_VERSION__: JSON.stringify(VERSION) },
     // 源码里已经写了 shebang；banner 只放说明，避免出现两行 shebang。
     banner: { js: banner('mom-memory CLI') },
   });
@@ -171,6 +184,7 @@ async function buildMcp() {
     format: 'esm',
     platform: 'node',
     target: 'node20',
+    define: { __MOM_VERSION__: JSON.stringify(VERSION) },
     banner: { js: banner('mom-memory MCP') },
   });
   const bytes = (await readFile(path.join(outDir, 'mcp.js'))).length;

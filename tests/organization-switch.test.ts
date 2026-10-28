@@ -29,7 +29,7 @@ async function setup(organization = defaultOrganization(), root = 'Second Brain'
   plugin.service = service;
   await service.load();
   const save = vi.spyOn(plugin, 'saveData').mockResolvedValue(undefined);
-  return { plugin, service, vault, settings, save, reload };
+  return { plugin, service, vault, settings, save, reload, app };
 }
 
 function switchVia(plugin: MissherMemoryPlugin, route: Route, root = '新库', organization = defaultOrganization()) {
@@ -168,6 +168,67 @@ describe('两个切换入口的确认、队列与保存边界', () => {
     reload.mockReturnValueOnce(false);
     const result = await switchVia(plugin, route);
     expect(result.ok).toBe(true);
+    expect(result.message).toMatch(/手动|当前仍使用旧方案/);
+    if ('reloading' in result) expect(result.reloading).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(plugin.currentSettings().root).toBe('新库');
+    expect(service.memoryRoot).toBe('Second Brain');
+  });
+
+  it.each(routes)('%s 重载命令抛错时不误报保存失败', async route => {
+    // 重载在 saveData 之后：异常若放出去，用户会以为设置没保存而重试。
+    const { plugin, service, save, reload } = await setup();
+    reload.mockImplementationOnce(() => {
+      throw new Error('synthetic reload failure');
+    });
+    const result = await switchVia(plugin, route);
+    expect(result.message).not.toContain('synthetic reload failure');
+    expect(result.message).not.toMatch(/未保存/);
+    expect(result.message).toMatch(/手动|当前仍使用旧方案/);
+    expect(result.ok).toBe(true);
+    if ('reloading' in result) expect(result.reloading).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    // 保存确实生效，但本次运行仍用旧配置。
+    expect(plugin.currentSettings().root).toBe('新库');
+    expect(service.memoryRoot).toBe('Second Brain');
+  });
+
+  it.each(routes)('%s 宿主没有重载命令时如实要求手动重载', async route => {
+    const { plugin, service, save, app, settings } = await setup();
+    // 真实宿主缺 commands 时是「没有这个接口」，不是「接口抛错」。
+    delete (app as { commands?: unknown }).commands;
+    const result = await switchVia(plugin, route);
+    expect(result.ok).toBe(true);
+    expect(result.message).toMatch(/手动|当前仍使用旧方案/);
+    if ('reloading' in result) expect(result.reloading).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(plugin.currentSettings()).not.toBe(settings);
+    expect(plugin.currentSettings().root).toBe('新库');
+    expect(service.memoryRoot).toBe('Second Brain');
+  });
+
+  it('applyRoot 重载失败提示里写明当前运行仍使用原根', async () => {
+    const { plugin, service, save, reload } = await setup();
+    // setup() 默认 reload 成功；这里要的是「重载失败」分支。
+    reload.mockReturnValue(false);
+    const result = await plugin.applyRoot('新库');
+    expect(result.ok).toBe(true);
+    expect(result.reloading).toBe(false);
+    // 用户必须知道这一秒实际在用哪个根，而不只是「需要重载」。
+    expect(result.message).toContain('Second Brain');
+    expect(result.message).toContain('仍使用原根');
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(service.memoryRoot).toBe('Second Brain');
+  });
+
+  it.each(routes)('%s 异步 reload reject 时返回已保存而不抛错', async route => {
+    const { plugin, service, save, reload } = await setup();
+    // 真实宿主可能返回 Promise：拒绝必须被当成重载失败，而不是冒泡成保存失败。
+    reload.mockReturnValueOnce(Promise.reject(new Error('synthetic async reload failure')));
+    const result = await switchVia(plugin, route);
+    expect(result.ok).toBe(true);
+    expect(result.message).not.toContain('synthetic async reload failure');
+    expect(result.message).not.toMatch(/未保存/);
     expect(result.message).toMatch(/手动|当前仍使用旧方案/);
     if ('reloading' in result) expect(result.reloading).toBe(false);
     expect(save).toHaveBeenCalledTimes(1);

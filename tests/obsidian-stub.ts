@@ -47,6 +47,14 @@ export interface FakeVaultOptions {
   readErrors?: string[];
   /** 让指定路径的写入抛错。 */
   writeErrors?: string[];
+  /**
+   * 去掉 `vault.process`（模拟没有原子读写区的旧宿主）。
+   *
+   * 用于验证「缺少必要接口时**拒绝写入**」：绝不能退到非原子的 `modify`。
+   */
+  withoutProcess?: boolean;
+  /** 去掉 `adapter.rename`（模拟无法原子认领队列请求的宿主）。 */
+  withoutAdapterRename?: boolean;
 }
 
 interface FakeFile {
@@ -139,6 +147,21 @@ export class FakeVault {
     this.adapter = new FakeDataAdapter(this);
     for (const [path, content] of Object.entries(options.files ?? {})) {
       this.putRaw(path, content);
+    }
+    /**
+     * 模拟「宿主没提供这个接口」。
+     *
+     * 做法是在**实例**上放一个 `undefined` 遮蔽原型方法，而不是删原型：
+     * 类方法挂在原型上，删原型会污染同一进程里后续所有 FakeVault/adapter
+     * （第一版就是这样，用例之间互相串味）。
+     * 被测代码判定的是 `typeof vault.process !== 'function'`，
+     * 遮蔽后与该判定在旧宿主上的结果完全一致，且只影响这一个实例。
+     */
+    if (options.withoutProcess) {
+      (this as { process?: unknown }).process = undefined;
+    }
+    if (options.withoutAdapterRename) {
+      (this.adapter as { rename?: unknown }).rename = undefined;
     }
   }
 
@@ -464,18 +487,102 @@ export class Notice {
   }
 }
 
-export function createFakeApp(vault: FakeVault): {
+/**
+ * 假 App：只提供被测代码真正用到的接口。
+ *
+ * `options` 用来关掉**可选**能力（密钥存储的读/写、命令面板重载），
+ * 正是为了验证「缺可选接口时只关闭对应功能，核心继续可用」。
+ * 密钥存储的读与写**分开**开关：真实宿主出现过只有其中一个的情况。
+ */
+export function createFakeApp(
+  vault: FakeVault,
+  options: {
+    withoutSecretStorage?: boolean;
+    /** 只有 setSecret、没有 getSecret。 */
+    secretStorageGetterOnly?: boolean;
+    /** 只有 getSecret、没有 setSecret。 */
+    secretStorageSetterOnly?: boolean;
+    /** setSecret 抛错（写入没有发生）。 */
+    secretStorageSetThrows?: boolean;
+    /** setSecret **先写入再抛错**（模拟 setter 落盘后失败）。 */
+    secretStorageSetWritesThenThrows?: boolean;
+    /** getSecret 抛错（模拟读取失败）。 */
+    secretStorageGetThrows?: boolean;
+    withoutCommands?: boolean;
+    /** executeCommandById 抛错（模拟重载命令故障）。 */
+    reloadThrows?: boolean;
+    /** executeCommandById 返回 false（模拟命令未注册）。 */
+    reloadReturnsFalse?: boolean;
+  } = {},
+): {
   vault: FakeVault;
-  secretStorage: { getSecret(id: string): string | null; setSecret(id: string, value: string): void };
+  secretStorage?: {
+    getSecret?(id: string): string | null;
+    setSecret?(id: string, value: string): void;
+  };
+  commands?: { executeCommandById(id: string): boolean };
+  reloadCalls: string[];
+  /** 持久化成功的密钥（测试用来断言「到底写没写进存储」）。 */
+  persistedSecrets: Map<string, string>;
+  /**
+   * 切换 getSecret 的行为，模拟「写入成功、但写后读回失败/不一致」。
+   *
+   * `'normal'`（默认）/`'different'` 返回不一致的值 /`'throws'` 抛错。
+   */
+  setReadBackMode(mode: 'normal' | 'different' | 'throws'): void;
 } {
   const secrets = new Map<string, string>();
-  return {
+  const reloadCalls: string[] = [];
+  let readBackMode: 'normal' | 'different' | 'throws' = 'normal';
+  const app: {
+    vault: FakeVault;
+    secretStorage?: {
+      getSecret?(id: string): string | null;
+      setSecret?(id: string, value: string): void;
+    };
+    commands?: { executeCommandById(id: string): boolean };
+    reloadCalls: string[];
+    persistedSecrets: Map<string, string>;
+    setReadBackMode(mode: 'normal' | 'different' | 'throws'): void;
+  } = {
     vault,
-    secretStorage: {
-      getSecret: (id: string) => secrets.get(id) ?? null,
-      setSecret: (id: string, value: string) => {
-        secrets.set(id, value);
-      },
+    reloadCalls,
+    persistedSecrets: secrets,
+    setReadBackMode: mode => {
+      readBackMode = mode;
     },
   };
+  if (!options.withoutSecretStorage) {
+    const storage: {
+      getSecret?(id: string): string | null;
+      setSecret?(id: string, value: string): void;
+    } = {};
+    if (!options.secretStorageSetterOnly) {
+      storage.getSecret = (id: string) => {
+        if (options.secretStorageGetThrows || readBackMode === 'throws') throw new Error('EAUTH: getSecret');
+        if (readBackMode === 'different') return 'sk-different-readback';
+        return secrets.get(id) ?? null;
+      };
+    }
+    if (!options.secretStorageGetterOnly) {
+      storage.setSecret = (id: string, value: string) => {
+        if (options.secretStorageSetThrows) throw new Error('EAUTH: setSecret');
+        secrets.set(id, value);
+        // 先落盘再抛：真实 setter 可能写成功后才在后续步骤失败。
+        if (options.secretStorageSetWritesThenThrows) throw new Error('EAUTH: setSecret (after write)');
+      };
+    }
+    app.secretStorage = storage;
+  }
+  if (!options.withoutCommands) {
+    app.commands = {
+      executeCommandById: (id: string) => {
+        reloadCalls.push(id);
+        if (options.reloadThrows) throw new Error('reload failed');
+        if (options.reloadReturnsFalse) return false;
+        return true;
+      },
+    };
+  }
+  return app;
 }

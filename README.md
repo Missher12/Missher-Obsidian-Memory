@@ -1,7 +1,5 @@
 # Missher Obsidian Memory
 
-[Missher 项目总入口](https://github.com/Missher12/Missher-DeepseekHarness-Desktop) · [全部插件目录](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/plugins/README.zh.md)
-
 一个**独立的** Obsidian 第二大脑与 AI 记忆插件：记忆是你库里的普通 Markdown，
 写不进去就不会假装写进去了。
 
@@ -10,17 +8,9 @@
 - AI 是**可选**的：不配模型也能记、能搜、能复盘（本地确定性检查）；
 - 不依赖 MSE、DSH、OpenViking 或任何云服务才能启动和使用。
 
-需求编号 `OBS-MEM-20261009`。版本 `0.2.0`。源码与产品安装包按 MIT 许可证公开；个人 Vault、笔记、凭据和学习数据仍由用户自行保管，不进入本仓库。
+需求编号 `OBS-MEM-20261009`。版本 `0.2.0`。
 
 ---
-
-## 界面预览
-
-在 Obsidian 内打开“记忆工作台”，浏览待确认的记忆；确认、忽略或打开原文均在同一侧栏完成。
-
-![Obsidian Memory 的中文分类目录与待确认记忆工作台](docs/images/memory-workbench.png)
-
-图为 `0.2.0` 的真实应用截图，使用完全虚构的“青岚演示库”，AI 已关闭。截图展示分类与工作台界面，不包含个人笔记，也不代表所有宿主版本均已验证。
 
 ## 30 秒看懂它解决什么问题
 
@@ -45,9 +35,7 @@
 
 ### 1. 装插件
 
-下载[最新正式版插件 ZIP 与 CLI 包](https://github.com/Missher12/Missher-Obsidian-Memory/releases/latest)，本次 0.2.0 分类说明见 [Missher 中文分类](docs/CLASSIFICATION.md)。源码构建的交付目录为 `dist/`；旧版 0.1.1 保留，其安装包不包含中文分类功能。
-
-兼容维护以支持合理的 Obsidian 版本范围、持续适配最新版为目标。当前清单声明最低 Obsidian 1.5.0，仅用于桌面端；最低要求和测试记录分别说明，已测试版本不代表唯一可用版本。0.2.0 的离线检查与尚未完成的原生验收见[交付记录](docs/DELIVERY-0.2.0.md)。
+本轮 0.2.0 交付目录为 `dist/`，分类说明见 [Missher 中文分类](docs/CLASSIFICATION.md)。旧版 [0.1.1 Release](https://github.com/Missher12/Missher-Obsidian-Memory/releases/tag/0.1.1) 保留；它不包含本轮分类功能。
 
 从源码构建需要 Node ≥ 22.13 与 pnpm：
 
